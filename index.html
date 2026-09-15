@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#143b56">
+  <meta name="description" content="Hotel Manager Pro - quản lý khách sạn trên Vercel và Supabase">
+  <title>Hotel Manager Pro 4</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="boot" class="boot"><div class="spinner"></div><strong>Đang tải Hotel Manager Pro…</strong></div>
+  <div id="app" class="app hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="brand"><span class="brand-icon">🏨</span><div><b id="brandName">HOTEL MANAGER PRO</b><small>Vercel + Supabase</small></div></div>
+      <nav id="nav">
+        <button data-page="dashboard" class="active">📊 Dashboard</button>
+        <button data-page="rooms">🛏️ Sơ đồ phòng</button>
+        <button data-page="bookings">📅 Đặt phòng</button>
+        <button data-page="stays">🧳 Lưu trú</button>
+        <button data-page="services">🥤 Dịch vụ / Minibar</button>
+        <button data-page="payments">🧾 Thanh toán</button>
+        <button data-page="housekeeping">🧹 Buồng phòng</button>
+        <button data-page="finance">🔒 Tài chính</button>
+        <button data-page="settings">⚙️ Cài đặt</button>
+      </nav>
+      <div class="sync-card"><span id="modeBadge" class="badge">Đang kết nối</span><small id="syncText">Phiên bản 4.0.0</small></div>
+    </aside>
+    <div id="sidebarBackdrop" class="backdrop"></div>
+    <main class="main">
+      <header class="topbar">
+        <button id="menuButton" class="icon-button mobile-only" aria-label="Mở menu">☰</button>
+        <div><h1 id="pageTitle">Dashboard</h1><p id="pageSubtitle">Tình trạng vận hành khách sạn</p></div>
+        <div class="top-actions"><button id="refreshButton" class="button secondary">↻ Làm mới</button><button id="backupButton" class="button secondary">⬇ Sao lưu</button></div>
+      </header>
+      <div id="notice"></div>
+      <section id="content" class="content"></section>
+    </main>
+  </div>
+
+  <div id="busy" class="busy hidden"><div class="spinner"></div><span>Đang lưu dữ liệu…</span></div>
+  <div id="toast" class="toast hidden"></div>
+
+  <dialog id="modal" class="modal"><form method="dialog"><button class="modal-close" value="cancel" aria-label="Đóng">×</button><div id="modalBody"></div></form></dialog>
+  <dialog id="loginModal" class="modal login-modal"><form id="loginForm"><div class="login-logo">🏨</div><h2>Đăng nhập Hotel Manager Pro</h2><p>Nhập mã truy cập đã cấu hình trên Vercel.</p><label>Mã truy cập<input id="accessKeyInput" type="password" autocomplete="current-password" required></label><button class="button primary wide">Đăng nhập</button><p id="loginError" class="error-text"></p></form></dialog>
+  <input id="restoreInput" class="hidden" type="file" accept="application/json,.json">
+
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>
