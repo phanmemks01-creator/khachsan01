@@ -19,8 +19,10 @@ function localSave(state) {
 
 async function request(path, options = {}) {
   const accessKey = sessionStorage.getItem(ACCESS_KEY) || '';
+  const timeoutSignal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(15000) : undefined;
   const response = await fetch(path, {
     ...options,
+    signal: options.signal || timeoutSignal,
     headers: {
       'Content-Type': 'application/json',
       ...(accessKey ? { Authorization: `Bearer ${accessKey}` } : {}),
@@ -52,6 +54,7 @@ export class HotelStore {
       const { response, body } = await request('/api/state');
       if (response.status === 401) return { requiresLogin: true, state: local };
       if (!response.ok) throw new Error(body.message || body.error || 'Không kết nối được máy chủ.');
+      this.mode = 'supabase';
       if (body.state) {
         validateState(body.state);
         this.state = body.state; this.version = Number(body.version || 0);
@@ -59,7 +62,7 @@ export class HotelStore {
         this.state = local; this.version = 0;
         await this.save(this.state);
       }
-      this.mode = 'supabase'; this.lastError = ''; localSave(this.state);
+      this.lastError = ''; localSave(this.state);
       return { requiresLogin: false, state: this.state };
     } catch (error) {
       this.state = local; this.version = Number(local.meta?.serverVersion || 0); this.mode = 'local'; this.lastError = error.message;
@@ -74,12 +77,15 @@ export class HotelStore {
     return result;
   }
 
-  async save(state) {
+  async save(state, options = {}) {
     validateState(state);
-    this.state = state; localSave(state);
-    if (this.mode !== 'supabase') return { local: true };
+    if (this.mode !== 'supabase') {
+      this.state = state;
+      localSave(state);
+      return { local: true };
+    }
     const { response, body } = await request('/api/state', {
-      method: 'POST', body: JSON.stringify({ state, expectedVersion: this.version })
+      method: 'POST', body: JSON.stringify({ state, expectedVersion: this.version, ...(options.newAccessKey ? { newAccessKey: options.newAccessKey } : {}) })
     });
     if (response.status === 409) {
       const error = new Error('Dữ liệu đã thay đổi ở thiết bị khác. Hệ thống đang tải lại để tránh ghi đè.');
@@ -87,8 +93,20 @@ export class HotelStore {
     }
     if (!response.ok) throw new Error(body.message || body.error || 'Không lưu được dữ liệu lên Supabase.');
     this.version = Number(body.version || this.version + 1);
-    state.meta.serverVersion = this.version; localSave(state); this.lastError = '';
+    state.meta.serverVersion = this.version;
+    this.state = state;
+    localSave(state);
+    this.lastError = '';
     return { local: false, version: this.version };
+  }
+
+  async changeAccessKey(newAccessKey) {
+    const value = String(newAccessKey || '').trim();
+    if (value.length < 12) throw new Error('Mã truy cập phải có ít nhất 12 ký tự.');
+    if (this.mode !== 'supabase') throw new Error('Đổi mã truy cập cần kết nối Supabase trên Vercel.');
+    const result = await this.save(this.state, { newAccessKey: value });
+    this.setAccessKey(value);
+    return result;
   }
 
   exportJson() {
