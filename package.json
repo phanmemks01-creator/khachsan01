@@ -1,15 +1,15 @@
 {
   "name": "hotel-manager-pro-vercel-supabase",
-  "version": "4.0.0",
+  "version": "4.2.2",
   "private": true,
   "type": "module",
   "description": "Hotel Manager Pro - Vercel + Supabase, chuyển đổi từ Google Sheets + Apps Script",
   "scripts": {
-    "build": "node scripts/build-check.mjs",
+    "build": "node scripts/build-check.mjs && node scripts/build-static.mjs",
     "test": "node tests/run-tests.mjs",
     "check": "npm run build && npm test"
   },
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
   }
 }
