@@ -1,15 +1,22 @@
 {
-  "name": "hotel-manager-pro-vercel-supabase",
-  "version": "4.2.2",
-  "private": true,
-  "type": "module",
-  "description": "Hotel Manager Pro - Vercel + Supabase, chuyển đổi từ Google Sheets + Apps Script",
-  "scripts": {
-    "build": "node scripts/build-check.mjs && node scripts/build-static.mjs",
-    "test": "node tests/run-tests.mjs",
-    "check": "npm run build && npm test"
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "outputDirectory": "public",
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "functions": {
+    "api/*.js": {
+      "maxDuration": 10
+    }
   },
-  "engines": {
-    "node": "24.x"
-  }
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "SAMEORIGIN" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" }
+      ]
+    }
+  ]
 }
