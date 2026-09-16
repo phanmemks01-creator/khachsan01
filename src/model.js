@@ -1,7 +1,6 @@
-export const APP_VERSION = '4.0.0';
+export const APP_VERSION = '4.2.3';
 export const ROOM_STATUSES = ['Phòng trống', 'Đã đặt', 'Đang ở', 'Chờ vệ sinh', 'Bảo trì', 'Tạm khóa'];
 export const ACTIVE_BOOKING_STATUSES = ['Chờ xác nhận', 'Đã xác nhận', 'Đã nhận phòng'];
-export const DEFAULT_FINANCE_PIN_HASH = 'a1fb4e703a9ef1fa4936801721ff285a97ac85330856674412e054892afe6972';
 
 export function id(prefix = 'ID') {
   const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
@@ -54,7 +53,7 @@ export function createInitialState() {
       checkInTime: '14:00', checkOutTime: '12:00', currency: 'VND', vatRate: 0,
       serviceFeeRate: 0, invoiceTitle: 'HÓA ĐƠN THANH TOÁN', invoiceFooter: 'Cảm ơn Quý khách và hẹn gặp lại!',
       financeLocked: true, financeSessionMinutes: 30, financeMaxAttempts: 5, financeLockMinutes: 15,
-      financePinHash: DEFAULT_FINANCE_PIN_HASH
+      financePinHash: ''
     },
     rates, rooms, services,
     guests: [], bookings: [], stays: [], moves: [], charges: [], invoices: [], invoiceLines: [], receipts: [],
