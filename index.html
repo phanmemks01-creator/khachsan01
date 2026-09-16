@@ -41,7 +41,7 @@
   <div id="busy" class="busy hidden"><div class="spinner"></div><span>Đang lưu dữ liệu…</span></div>
   <div id="toast" class="toast hidden"></div>
 
-  <dialog id="modal" class="modal"><form method="dialog"><button class="modal-close" value="cancel" aria-label="Đóng">×</button><div id="modalBody"></div></form></dialog>
+  <dialog id="modal" class="modal"><button id="modalClose" class="modal-close" type="button" aria-label="Đóng">×</button><div id="modalBody"></div></dialog>
   <dialog id="loginModal" class="modal login-modal"><form id="loginForm"><div class="login-logo">🏨</div><h2>Đăng nhập Hotel Manager Pro</h2><p>Nhập mã truy cập đã cấu hình trên Vercel.</p><label>Mã truy cập<input id="accessKeyInput" type="password" autocomplete="current-password" required></label><button class="button primary wide">Đăng nhập</button><p id="loginError" class="error-text"></p></form></dialog>
   <input id="restoreInput" class="hidden" type="file" accept="application/json,.json">
 
