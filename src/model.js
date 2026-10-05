@@ -1,4 +1,4 @@
-export const APP_VERSION = '4.2.3';
+export const APP_VERSION = '4.3.6';
 export const ROOM_STATUSES = ['Phòng trống', 'Đã đặt', 'Đang ở', 'Chờ vệ sinh', 'Bảo trì', 'Tạm khóa'];
 export const ACTIVE_BOOKING_STATUSES = ['Chờ xác nhận', 'Đã xác nhận', 'Đã nhận phòng'];
 
@@ -19,9 +19,9 @@ export function isoLocal(date = new Date()) {
 
 export function createInitialState() {
   const rates = [
-    { id: 'GIA_DON', roomType: 'Phòng đơn', name: 'Giá phòng đơn', weekday: 500000, weekend: 550000, active: true },
-    { id: 'GIA_DOI', roomType: 'Phòng đôi', name: 'Giá phòng đôi', weekday: 800000, weekend: 900000, active: true },
-    { id: 'GIA_GIA_DINH', roomType: 'Phòng gia đình', name: 'Giá phòng gia đình', weekday: 1200000, weekend: 1350000, active: true }
+    { id: 'GIA_DON', roomType: 'Phòng đơn', name: 'Giá phòng đơn', weekday: 500000, weekend: 550000, overnight: 350000, hourlyFirst: 150000, hourlySecond: 30000, hourlyThird: 20000, hourlyFromFourth: 20000, active: true },
+    { id: 'GIA_DOI', roomType: 'Phòng đôi', name: 'Giá phòng đôi', weekday: 800000, weekend: 900000, overnight: 550000, hourlyFirst: 200000, hourlySecond: 50000, hourlyThird: 40000, hourlyFromFourth: 30000, active: true },
+    { id: 'GIA_GIA_DINH', roomType: 'Phòng gia đình', name: 'Giá phòng gia đình', weekday: 1200000, weekend: 1350000, overnight: 800000, hourlyFirst: 300000, hourlySecond: 80000, hourlyThird: 60000, hourlyFromFourth: 50000, active: true }
   ];
   const rooms = Array.from({ length: 20 }, (_, index) => {
     const number = index + 1;
