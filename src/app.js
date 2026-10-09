@@ -56,12 +56,19 @@ function closeModal() { $('#modal').close(); }
 async function mutate(action, successMessage) {
   if (ui.busy) return false;
   setBusy(true);
+  $('#modalBody [data-save-error]')?.remove();
   try {
     const next = action(ui.state); validateState(next);
     await store.save(next);
     ui.state = next; render(); toast(successMessage || 'Đã lưu dữ liệu.'); return true;
   } catch (error) {
-    toast(error.message || 'Không thể lưu dữ liệu.', true);
+    const message = error.message || 'Không thể lưu dữ liệu.';
+    toast(message, true);
+    if ($('#modal').open) {
+      const alert = document.createElement('p');
+      alert.className = 'error-text'; alert.dataset.saveError = ''; alert.setAttribute('role', 'alert');
+      alert.textContent = message; $('#modalBody .modal-content').append(alert);
+    }
     if (error.code === 'VERSION_CONFLICT') { const result = await store.load(); ui.state = result.state; render(); }
     return false;
   } finally { setBusy(false); }
@@ -466,26 +473,28 @@ document.addEventListener('change', (event) => {
 });
 
 document.addEventListener('submit', async (event) => {
-  event.preventDefault(); const form = event.target; const data = formData(form);
-  if (form.id === 'bookingForm') { data.roomIds = [...ui.booking.selected]; data.arrival = ui.booking.arrival; data.departure = ui.booking.departure; data.priceMode = ui.booking.priceMode; await mutate((state) => createBooking(state, data), 'Đã lưu đặt phòng và chốt loại tính giá.'); ui.booking.selected.clear(); }
-  if (form.id === 'chargeForm') {
+  event.preventDefault(); const form = event.target;
+  // Named controls (e.g. name="id") can shadow native form properties.
+  const formId = form.getAttribute('id'); const data = formData(form);
+  if (formId === 'bookingForm') { data.roomIds = [...ui.booking.selected]; data.arrival = ui.booking.arrival; data.departure = ui.booking.departure; data.priceMode = ui.booking.priceMode; await mutate((state) => createBooking(state, data), 'Đã lưu đặt phòng và chốt loại tính giá.'); ui.booking.selected.clear(); }
+  if (formId === 'chargeForm') {
     const items = $$('[data-charge-row]', form).map((row) => ({ serviceId: $('select[name="serviceId"]', row)?.value || '', quantity: $('input[name="quantity"]', row)?.value || '1' })).filter((item) => item.serviceId);
     if (!items.length) return toast('Vui lòng chọn ít nhất một dịch vụ.', true);
     const saved = await mutate((state) => items.reduce((next, item) => addCharge(next, { stayId: data.stayId, ...item, note: data.note || '' }), state), 'Đã ghi toàn bộ dịch vụ phát sinh.');
     if (saved) form.reset();
   }
-  if (form.id === 'stockForm') { await mutate((state) => receiveStock(state, data), 'Đã nhập kho.'); form.reset(); }
-  if (form.id === 'checkoutForm') { const saved = await mutate((state) => checkOut(state, data.stayId, data), 'Đã trả phòng và lập hóa đơn.'); if (saved) { closeModal(); navigate('payments'); } }
-  if (form.id === 'extendStayForm') { await mutate((state) => extendStay(state, data.stayId, data.newCheckout), 'Đã gia hạn lưu trú và giữ giá đã chốt.'); closeModal(); }
-  if (form.id === 'transferRoomForm') { await mutate((state) => transferRoom(state, data.stayId, data.newRoomId, data.movedAt, data.reason), 'Đã chuyển phòng và tạo công việc vệ sinh phòng cũ.'); closeModal(); }
-  if (form.id === 'paymentForm') {
+  if (formId === 'stockForm') { await mutate((state) => receiveStock(state, data), 'Đã nhập kho.'); form.reset(); }
+  if (formId === 'checkoutForm') { const saved = await mutate((state) => checkOut(state, data.stayId, data), 'Đã trả phòng và lập hóa đơn.'); if (saved) { closeModal(); navigate('payments'); } }
+  if (formId === 'extendStayForm') { await mutate((state) => extendStay(state, data.stayId, data.newCheckout), 'Đã gia hạn lưu trú và giữ giá đã chốt.'); closeModal(); }
+  if (formId === 'transferRoomForm') { await mutate((state) => transferRoom(state, data.stayId, data.newRoomId, data.movedAt, data.reason), 'Đã chuyển phòng và tạo công việc vệ sinh phòng cũ.'); closeModal(); }
+  if (formId === 'paymentForm') {
     const saved = await mutate((state) => {
       const next = adjustInvoice(state, data.invoiceId, data);
       return Number(data.amount || 0) > 0 ? payInvoice(next, data.invoiceId, data) : next;
     }, 'Đã cập nhật hóa đơn và ghi nhận thanh toán riêng.');
     if (saved) closeModal();
   }
-  if (form.id === 'groupPaymentForm') {
+  if (formId === 'groupPaymentForm') {
     const fd = new FormData(form); const invoiceIds = fd.getAll('invoiceIds');
     const saved = await mutate((state) => {
       let next = state;
@@ -502,15 +511,15 @@ document.addEventListener('submit', async (event) => {
     }, 'Đã cập nhật chi tiết và thanh toán gộp nhiều phòng.');
     if (saved) closeModal();
   }
-  if (form.id === 'maintenanceForm') { await mutate((state) => createMaintenance(state, data.roomId, data.issue, data.priority), 'Đã tạo phiếu bảo trì.'); closeModal(); }
-  if (form.id === 'setupFinancePinForm') {
+  if (formId === 'maintenanceForm') { await mutate((state) => createMaintenance(state, data.roomId, data.issue, data.priority), 'Đã tạo phiếu bảo trì.'); closeModal(); }
+  if (formId === 'setupFinancePinForm') {
     if (data.pin !== data.confirmPin) return toast('Hai lần nhập PIN chưa giống nhau.', true);
     const hash = await sha256(data.pin);
     await mutate((state) => { const next = deepClone(state); next.settings.financePinHash = hash; next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã thiết lập PIN tài chính.');
     ui.financeUnlockedUntil = Date.now() + Number(ui.state.settings.financeSessionMinutes || 30) * 60000;
     closeModal(); render();
   }
-  if (form.id === 'financePinForm') {
+  if (formId === 'financePinForm') {
     const lockedUntil = Number(sessionStorage.getItem('hotel-finance-locked-until') || 0);
     if (Date.now() < lockedUntil) return toast(`Tài chính đang tạm khóa. Vui lòng thử lại sau ${Math.ceil((lockedUntil - Date.now()) / 60000)} phút.`, true);
     if (await sha256(data.pin) !== ui.state.settings.financePinHash) {
@@ -526,8 +535,8 @@ document.addEventListener('submit', async (event) => {
     sessionStorage.removeItem('hotel-finance-attempts'); sessionStorage.removeItem('hotel-finance-locked-until');
     ui.financeUnlockedUntil = Date.now() + Number(ui.state.settings.financeSessionMinutes || 30) * 60000; closeModal(); render();
   }
-  if (form.id === 'changePinForm') { if (await sha256(data.currentPin) !== ui.state.settings.financePinHash) return toast('PIN hiện tại không đúng.', true); const hash = await sha256(data.newPin); await mutate((state) => { const next = deepClone(state); next.settings.financePinHash = hash; next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã đổi PIN tài chính.'); closeModal(); }
-  if (form.id === 'accessKeyForm') {
+  if (formId === 'changePinForm') { if (await sha256(data.currentPin) !== ui.state.settings.financePinHash) return toast('PIN hiện tại không đúng.', true); const hash = await sha256(data.newPin); await mutate((state) => { const next = deepClone(state); next.settings.financePinHash = hash; next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã đổi PIN tài chính.'); closeModal(); }
+  if (formId === 'accessKeyForm') {
     if (data.newAccessKey !== data.confirmAccessKey) return toast('Hai lần nhập mã truy cập chưa giống nhau.', true);
     if (String(data.newAccessKey || '').length < 12) return toast('Mã truy cập phải có ít nhất 12 ký tự.', true);
     setBusy(true);
@@ -535,15 +544,15 @@ document.addEventListener('submit', async (event) => {
     catch (error) { toast(error.message || 'Không thể đổi mã truy cập.', true); }
     finally { setBusy(false); }
   }
-  if (form.id === 'settingsForm') { await mutate((state) => { const next = deepClone(state); next.settings = { ...next.settings, ...data, financeLocked: data.financeLocked === 'true', vatRate: Number(data.vatRate || 0), serviceFeeRate: Number(data.serviceFeeRate || 0), financeSessionMinutes: Number(data.financeSessionMinutes || 30), financeMaxAttempts: Number(data.financeMaxAttempts || 5), financeLockMinutes: Number(data.financeLockMinutes || 15) }; next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã lưu cài đặt.'); }
-  if (form.id === 'roomTypeAddForm') { await mutate((state) => { const next = deepClone(state); const roomType = String(data.roomType || '').trim(); if (!roomType) throw new Error('Tên loại phòng không được để trống.'); if (next.rates.some((rate) => normalize(rate.roomType) === normalize(roomType))) throw new Error('Loại phòng này đã tồn tại.'); next.rates.push({ id: id('GIA'), roomType, name: `Giá ${roomType}`, weekday: Math.max(0, Number(data.weekday || 0)), weekend: Math.max(0, Number(data.weekend || 0)), overnight: Math.max(0, Number(data.overnight || 0)), hourlyFirst: Math.max(0, Number(data.hourlyFirst || 0)), hourlySecond: Math.max(0, Number(data.hourlySecond || 0)), hourlyThird: Math.max(0, Number(data.hourlyThird || 0)), hourlyFromFourth: Math.max(0, Number(data.hourlyFromFourth || 0)), active: true }); next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã thêm loại phòng mới và bảng giá tương ứng.'); closeModal(); }
-  if (form.id === 'roomAddForm') { await mutate((state) => { const next = deepClone(state); const roomId = String(data.id).trim().toUpperCase(); if (next.rooms.some((room) => room.id === roomId)) throw new Error('Mã phòng đã tồn tại.'); next.rooms.push({ id: roomId, name: data.name.trim(), floor: Number(data.floor), roomType: data.roomType, capacity: Number(data.capacity), status: 'Phòng trống', active: true, note: '' }); next.meta.revision += 1; return next; }, 'Đã thêm phòng.'); closeModal(); }
-  if (form.id === 'rateEditForm') { await mutate((state) => { const next = deepClone(state); next.rates.forEach((rate, index) => { rate.weekday = Math.max(0, Number(data[`weekday_${index}`] || 0)); rate.weekend = Math.max(0, Number(data[`weekend_${index}`] || 0)); rate.overnight = Math.max(0, Number(data[`overnight_${index}`] || 0)); rate.hourlyFirst = Math.max(0, Number(data[`hourlyFirst_${index}`] || 0)); rate.hourlySecond = Math.max(0, Number(data[`hourlySecond_${index}`] || 0)); rate.hourlyThird = Math.max(0, Number(data[`hourlyThird_${index}`] || 0)); rate.hourlyFromFourth = Math.max(0, Number(data[`hourlyFromFourth_${index}`] || 0)); }); next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã cập nhật bảng giá theo ngày, qua đêm và theo giờ.'); closeModal(); }
-  if (form.id === 'roomEditForm') {
-    await mutate((state) => { const next = deepClone(state); const room = next.rooms.find((item) => item.id === data.id); if (!room) throw new Error('Không tìm thấy phòng.'); if (room.roomType !== data.roomType && room.status !== 'Phòng trống') throw new Error('Chỉ được đổi loại phòng khi phòng đang trống.'); room.name = String(data.name || '').trim(); room.floor = Number(data.floor || 1); room.roomType = data.roomType; room.capacity = Math.max(1, Number(data.capacity || 1)); if (!room.name) throw new Error('Tên phòng không được để trống.'); next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã cập nhật phòng.'); closeModal();
+  if (formId === 'settingsForm') { await mutate((state) => { const next = deepClone(state); next.settings = { ...next.settings, ...data, financeLocked: data.financeLocked === 'true', vatRate: Number(data.vatRate || 0), serviceFeeRate: Number(data.serviceFeeRate || 0), financeSessionMinutes: Number(data.financeSessionMinutes || 30), financeMaxAttempts: Number(data.financeMaxAttempts || 5), financeLockMinutes: Number(data.financeLockMinutes || 15) }; next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã lưu cài đặt.'); }
+  if (formId === 'roomTypeAddForm') { await mutate((state) => { const next = deepClone(state); const roomType = String(data.roomType || '').trim(); if (!roomType) throw new Error('Tên loại phòng không được để trống.'); if (next.rates.some((rate) => normalize(rate.roomType) === normalize(roomType))) throw new Error('Loại phòng này đã tồn tại.'); next.rates.push({ id: id('GIA'), roomType, name: `Giá ${roomType}`, weekday: Math.max(0, Number(data.weekday || 0)), weekend: Math.max(0, Number(data.weekend || 0)), overnight: Math.max(0, Number(data.overnight || 0)), hourlyFirst: Math.max(0, Number(data.hourlyFirst || 0)), hourlySecond: Math.max(0, Number(data.hourlySecond || 0)), hourlyThird: Math.max(0, Number(data.hourlyThird || 0)), hourlyFromFourth: Math.max(0, Number(data.hourlyFromFourth || 0)), active: true }); next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã thêm loại phòng mới và bảng giá tương ứng.'); closeModal(); }
+  if (formId === 'roomAddForm') { const saved = await mutate((state) => { const next = deepClone(state); const roomId = String(data.id).trim().toUpperCase(); if (next.rooms.some((room) => room.id === roomId)) throw new Error('Mã phòng đã tồn tại.'); next.rooms.push({ id: roomId, name: data.name.trim(), floor: Number(data.floor), roomType: data.roomType, capacity: Number(data.capacity), status: 'Phòng trống', active: true, note: '' }); next.meta.revision += 1; return next; }, 'Đã thêm phòng.'); if (saved) closeModal(); }
+  if (formId === 'rateEditForm') { await mutate((state) => { const next = deepClone(state); next.rates.forEach((rate, index) => { rate.weekday = Math.max(0, Number(data[`weekday_${index}`] || 0)); rate.weekend = Math.max(0, Number(data[`weekend_${index}`] || 0)); rate.overnight = Math.max(0, Number(data[`overnight_${index}`] || 0)); rate.hourlyFirst = Math.max(0, Number(data[`hourlyFirst_${index}`] || 0)); rate.hourlySecond = Math.max(0, Number(data[`hourlySecond_${index}`] || 0)); rate.hourlyThird = Math.max(0, Number(data[`hourlyThird_${index}`] || 0)); rate.hourlyFromFourth = Math.max(0, Number(data[`hourlyFromFourth_${index}`] || 0)); }); next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã cập nhật bảng giá theo ngày, qua đêm và theo giờ.'); closeModal(); }
+  if (formId === 'roomEditForm') {
+    const saved = await mutate((state) => { const next = deepClone(state); const room = next.rooms.find((item) => item.id === data.id); if (!room) throw new Error('Không tìm thấy phòng.'); if (room.roomType !== data.roomType && room.status !== 'Phòng trống') throw new Error('Chỉ được đổi loại phòng khi phòng đang trống.'); room.name = String(data.name || '').trim(); room.floor = Number(data.floor || 1); room.roomType = data.roomType; room.capacity = Math.max(1, Number(data.capacity || 1)); if (!room.name) throw new Error('Tên phòng không được để trống.'); next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã cập nhật phòng.'); if (saved) closeModal();
   }
-  if (form.id === 'serviceAddForm') { await mutate((state) => { const next = deepClone(state); const serviceId = String(data.id).trim().toUpperCase(); if (next.services.some((item) => item.id === serviceId)) throw new Error('Mã dịch vụ đã tồn tại.'); next.services.push({ id: serviceId, type: data.type, name: data.name.trim(), unit: data.unit.trim(), cost: Number(data.cost || 0), price: Number(data.price || 0), trackStock: data.type === 'Đồ giải khát', stock: Number(data.stock || 0), minStock: 0, active: true }); next.meta.revision += 1; return next; }, 'Đã thêm dịch vụ.'); closeModal(); }
-  if (form.id === 'serviceEditForm') {
+  if (formId === 'serviceAddForm') { await mutate((state) => { const next = deepClone(state); const serviceId = String(data.id).trim().toUpperCase(); if (next.services.some((item) => item.id === serviceId)) throw new Error('Mã dịch vụ đã tồn tại.'); next.services.push({ id: serviceId, type: data.type, name: data.name.trim(), unit: data.unit.trim(), cost: Number(data.cost || 0), price: Number(data.price || 0), trackStock: data.type === 'Đồ giải khát', stock: Number(data.stock || 0), minStock: 0, active: true }); next.meta.revision += 1; return next; }, 'Đã thêm dịch vụ.'); closeModal(); }
+  if (formId === 'serviceEditForm') {
     await mutate((state) => { const next = deepClone(state); const service = next.services.find((item) => item.id === data.id); if (!service) throw new Error('Không tìm thấy dịch vụ.'); service.type = data.type; service.name = String(data.name || '').trim(); service.unit = String(data.unit || '').trim(); service.cost = Math.max(0, Number(data.cost || 0)); service.price = Math.max(0, Number(data.price || 0)); service.minStock = Math.max(0, Number(data.minStock || 0)); service.trackStock = data.type === 'Đồ giải khát'; if (!service.name || !service.unit) throw new Error('Tên và đơn vị không được để trống.'); next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã cập nhật danh mục dịch vụ.'); closeModal();
   }
 });
