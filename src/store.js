@@ -14,7 +14,15 @@ function localLoad() {
 }
 
 function localSave(state) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  // Cache is best-effort: a full/blocked localStorage must not turn a successful
+  // Supabase transaction into a false save failure.
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    return true;
+  } catch (error) {
+    console.warn('Không thể lưu bản sao dữ liệu cục bộ:', error);
+    return false;
+  }
 }
 
 async function request(path, options = {}) {
@@ -80,9 +88,7 @@ export class HotelStore {
   async save(state, options = {}) {
     validateState(state);
     if (this.mode !== 'supabase') {
-      this.state = state;
-      localSave(state);
-      return { local: true };
+      throw new Error('Chưa kết nối Supabase. Thay đổi chưa được lưu. Vui lòng kiểm tra kết nối và tải lại dữ liệu trước khi thử lại.');
     }
     const { response, body } = await request('/api/state', {
       method: 'POST', body: JSON.stringify({ state, expectedVersion: this.version, ...(options.newAccessKey ? { newAccessKey: options.newAccessKey } : {}) })
