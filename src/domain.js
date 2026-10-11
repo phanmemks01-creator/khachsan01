@@ -552,3 +552,67 @@ export function financeReport(state, from, to) {
     byDay: Object.entries(byDay).sort().map(([date, amount]) => ({ date, amount }))
   };
 }
+
+// Operational utilization by occupied room-hours, including hourly stays.
+export function roomPerformance(state, from, to, now = new Date()) {
+  const parse = (value) => Date.parse(value && !/[zZ]|[+-]\d\d:\d\d$/.test(value) ? `${value}+07:00` : value);
+  const start = parse(`${from}T00:00:00`);
+  const requestedEnd = parse(`${to}T00:00:00`) + 86400000;
+  const end = Math.min(requestedEnd, +now);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || !Number.isFinite(start + requestedEnd) || requestedEnd <= start) throw new Error('Khoảng ngày không hợp lệ. Đến ngày phải bằng hoặc sau Từ ngày.');
+  if ((requestedEnd - start) / 86400000 > 366) throw new Error('Vui lòng chọn tối đa 366 ngày.');
+  const rooms = state.rooms.filter((room) => room.active);
+  const spans = new Map(rooms.map((room) => [room.id, []]));
+  let missing = 0;
+  for (const stay of state.stays) {
+    if (!['Đang ở', 'Đã trả phòng'].includes(stay.status)) continue;
+    const finish = stay.checkout ? parse(stay.checkout) : stay.status === 'Đang ở' ? +now : NaN;
+    if (!Number.isFinite(finish) || !Number.isFinite(parse(stay.checkIn))) { missing++; continue; }
+    const history = stay.roomHistory?.length ? stay.roomHistory : [{ roomId: stay.roomId, from: stay.checkIn, to: stay.checkout }];
+    for (const segment of history) {
+      const a = Math.max(start, parse(segment.from));
+      const b = Math.min(end, finish, segment.to ? parse(segment.to) : finish);
+      if (b > a && spans.has(segment.roomId)) spans.get(segment.roomId).push([a, b]);
+    }
+  }
+  const merged = new Map();
+  for (const [id, list] of spans) {
+    const result = [];
+    for (const span of list.sort((a, b) => a[0] - b[0])) {
+      const previous = result.at(-1);
+      if (previous && span[0] <= previous[1]) previous[1] = Math.max(previous[1], span[1]);
+      else result.push([...span]);
+    }
+    merged.set(id, result);
+  }
+  const hours = (id, a, b) => (merged.get(id) || []).reduce((sum, span) => sum + Math.max(0, Math.min(b, span[1]) - Math.max(a, span[0])) / 3600000, 0);
+  const elapsed = Math.max(0, end - start) / 3600000;
+  const occupiedHours = rooms.reduce((sum, room) => sum + hours(room.id, start, end), 0);
+  const capacityHours = rooms.length * elapsed;
+  const daily = [];
+  for (let day = start; day < end; day += 86400000) {
+    const finish = Math.min(day + 86400000, end);
+    const used = rooms.reduce((sum, room) => sum + hours(room.id, day, finish), 0);
+    const capacity = rooms.length * (finish - day) / 3600000;
+    daily.push({ date: new Date(day + 7 * 3600000).toISOString().slice(0, 10), occupiedHours: used, capacityHours: capacity, rate: capacity ? used / capacity : 0 });
+  }
+  const byType = [...new Set(rooms.map((room) => room.roomType))].map((type) => {
+    const group = rooms.filter((room) => room.roomType === type);
+    const used = group.reduce((sum, room) => sum + hours(room.id, start, end), 0);
+    return { type, rooms: group.length, occupiedHours: used, rate: elapsed ? used / (group.length * elapsed) : 0 };
+  });
+  const invoices = state.invoices.filter((invoice) => parse(invoice.checkout) >= start && parse(invoice.checkout) < end);
+  const alerts = [];
+  const rate = capacityHours ? occupiedHours / capacityHours : 0;
+  if (!capacityHours) alerts.push({ level: 'Chưa có dữ liệu', text: 'Khoảng chọn chưa có thời gian đã diễn ra hoặc chưa có phòng hoạt động.', action: 'Chọn khoảng ngày đã qua và kiểm tra danh sách phòng.' });
+  else if (rate < 0.4) alerts.push({ level: 'Cần chú ý', text: `Hiệu suất theo giờ dưới ngưỡng tham khảo 40% trong kỳ.`, action: 'Kiểm tra đủ dữ liệu nhận–trả phòng trước; rà soát kênh bán, khách doanh nghiệp và ưu đãi ngày vắng.' });
+  else if (rate >= 0.8) alerts.push({ level: 'Cơ hội', text: 'Hiệu suất theo giờ từ 80% trở lên trong kỳ.', action: 'Rà soát giá cho các lượt đặt mới, bố trí nhân sự và ưu tiên hoàn tất vệ sinh phòng.' });
+  const cleaning = rooms.filter((room) => room.status === 'Chờ vệ sinh').length;
+  const blocked = rooms.filter((room) => ['Bảo trì', 'Tạm khóa'].includes(room.status)).length;
+  const overdue = state.stays.filter((stay) => stay.status === 'Đang ở' && parse(stay.expectedCheckout) < +now).length;
+  if (cleaning) alerts.push({ level: 'Hiện tại', text: `${cleaning} phòng đang chờ vệ sinh.`, action: 'Ưu tiên phòng có khách đến sớm để đưa phòng trở lại kinh doanh.' });
+  if (blocked) alerts.push({ level: 'Hiện tại', text: `${blocked} phòng đang bảo trì hoặc tạm khóa.`, action: 'Chốt thời hạn xử lý với bộ phận kỹ thuật và rà soát các lượt đặt liên quan.' });
+  if (overdue) alerts.push({ level: 'Cần xử lý', text: `${overdue} lượt lưu trú đã quá giờ trả dự kiến.`, action: 'Liên hệ khách xác nhận gia hạn hoặc trả phòng; kiểm tra lịch khách tiếp theo.' });
+  if (missing) alerts.push({ level: 'Dữ liệu', text: `${missing} lượt lưu trú thiếu mốc nhận/trả hợp lệ nên chưa tính.`, action: 'Rà soát lịch sử lưu trú để báo cáo đầy đủ.' });
+  return { occupiedHours, capacityHours, rate, daily, byType, alerts, roomRevenue: invoices.reduce((sum, invoice) => sum + money(invoice.roomAmount), 0), invoiceCount: invoices.length };
+}

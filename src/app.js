@@ -2,12 +2,14 @@ import { HotelStore } from './store.js';
 import { APP_VERSION, deepClone, id, isoLocal, validateState } from './model.js';
 import {
   addCharge, adjustInvoice, availableRooms, cancelBooking, checkIn, checkOut, completeMaintenance, createBooking,
-  createMaintenance, dashboard, extendStay, financeReport, invoiceGroupId, normalize, payInvoice, payInvoiceGroup, receiveStock, refundSurplus,
+  createMaintenance, dashboard, roomPerformance, extendStay, financeReport, invoiceGroupId, normalize, payInvoice, payInvoiceGroup, receiveStock, refundSurplus,
   roomPriceQuote, roomRate, transferRoom, updateHousekeeping
 } from './domain.js';
 
 const store = new HotelStore();
+const reportToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const ui = {
+  performance: { from: reportToday.slice(0, 7) + '-01', to: reportToday },
   page: 'dashboard', state: null, busy: false, financeUnlockedUntil: 0,
   booking: { arrival: isoLocal(), departure: isoLocal(new Date(Date.now() + 86400000)), priceMode: 'Theo ngày', query: '', floor: '', roomType: '', selected: new Set() },
   roomFilter: { query: '', floor: '', status: '' },
@@ -104,13 +106,20 @@ function render() {
 
 function kpi(label, value, color = 'blue') { return `<div class="card kpi ${color}"><small>${esc(label)}</small><strong>${esc(value)}</strong></div>`; }
 
+function renderRoomPerformance(unlocked) {
+  const { from, to } = ui.performance;
+  const report = roomPerformance(ui.state, from, to);
+  const hours = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 }).format(value);
+  return `<div class="card" style="margin-top:14px"><h2>2. Báo cáo hiệu suất phòng theo khoảng ngày</h2><form id="performanceForm" class="toolbar" style="margin-top:14px"><div class="field"><label>Từ ngày</label><input type="date" name="from" value="${esc(from)}" required></div><div class="field"><label>Đến ngày</label><input type="date" name="to" value="${esc(to)}" required></div><button class="button primary">Xem báo cáo</button></form><p class="sub">Tính cả hai ngày đã chọn, theo giờ Việt Nam; ngày hôm nay tính đến thời điểm hiện tại. Hiệu suất = giờ phòng thực tế có khách / tổng giờ của các phòng đang hoạt động. Phù hợp cả thuê giờ, qua đêm và theo ngày; không phải công suất theo đêm bán.</p><div class="grid grid-4">${kpi('Hiệu suất theo giờ', report.capacityHours ? pct(report.rate) : '—')}${kpi('Giờ phòng có khách', hours(report.occupiedHours))}${kpi('Tổng giờ phòng', hours(report.capacityHours))}${kpi('Tiền phòng trả trong kỳ', unlocked ? money(report.roomRevenue) : '🔒 Đã khóa')}</div><p class="sub">Mẫu số dùng danh sách phòng đang hoạt động hiện tại, bao gồm phòng chờ vệ sinh/bảo trì/tạm khóa; chưa có lịch sử tăng giảm số phòng. Tiền phòng lấy từ hóa đơn có ngày trả trong kỳ, gồm cả chưa thu; không gồm dịch vụ, thuế, phụ thu và giảm giá chung.</p><div class="grid grid-2"><div><h3>Theo loại phòng</h3><div class="table-wrap"><table class="table"><thead><tr><th>Loại phòng</th><th>Số phòng</th><th>Giờ có khách</th><th>Hiệu suất</th></tr></thead><tbody>${report.byType.map((row) => `<tr><td>${esc(row.type)}</td><td>${row.rooms}</td><td>${hours(row.occupiedHours)}</td><td>${report.capacityHours ? pct(row.rate) : '—'}</td></tr>`).join('')}</tbody></table></div></div><div><h3>Cảnh báo và đề xuất</h3><p class="sub">Ngưỡng 40%/80% là tham khảo nội bộ, không phải chuẩn ngành. Cảnh báo hiện tại độc lập với khoảng báo cáo.</p>${report.alerts.map((alert) => `<div class="notice" style="margin:10px 0"><b>${esc(alert.level)} · ${esc(alert.text)}</b><p>${esc(alert.action)}</p></div>`).join('') || '<p>Chưa có cảnh báo theo các quy tắc hiện tại.</p>'}</div></div><details style="margin-top:14px"><summary>Chi tiết hiệu suất theo ngày (${report.daily.length} ngày)</summary><div class="table-wrap" style="max-height:420px;overflow:auto"><table class="table"><thead><tr><th>Ngày</th><th>Giờ có khách</th><th>Tổng giờ phòng</th><th>Hiệu suất</th></tr></thead><tbody>${report.daily.map((row) => `<tr><td>${esc(row.date.split('-').reverse().join('/'))}</td><td>${hours(row.occupiedHours)}</td><td>${hours(row.capacityHours)}</td><td>${pct(row.rate)}</td></tr>`).join('') || '<tr><td colspan="4">Chưa có thời gian thực tế trong khoảng đã chọn.</td></tr>'}</tbody></table></div></details></div>`;
+}
+
 function renderDashboard() {
   const data = dashboard(ui.state); const unlocked = !ui.state.settings.financeLocked || Date.now() < ui.financeUnlockedUntil;
   const pending = ui.state.invoices.filter((item) => item.status === 'Chờ thanh toán').slice(0, 6);
   return `<div class="grid grid-6">${kpi('Tổng phòng', data.totalRooms)}${kpi('Phòng trống', data.available, 'green')}${kpi('Đã đặt', data.booked)}${kpi('Đang ở', data.occupied, 'orange')}${kpi('Chờ vệ sinh', data.cleaning, 'orange')}${kpi('Bảo trì', data.maintenance, 'red')}</div>
   <div class="grid grid-4" style="margin-top:14px">${kpi('Công suất phòng', pct(data.occupancyRate))}${kpi('Khách đến hôm nay', data.arrivalsToday)}${kpi('Trả phòng hôm nay', data.departuresToday)}${kpi('Hóa đơn chờ thu', data.pendingInvoices, 'red')}</div>
   <div class="grid grid-2" style="margin-top:14px"><div class="card"><h3>Tài chính tháng này</h3><div class="summary" style="margin-top:18px"><div><span>Doanh thu</span><b>${unlocked ? money(data.monthRevenue) : '🔒 Đã khóa'}</b></div><div><span>Công nợ</span><b>${unlocked ? money(data.outstanding) : '🔒 Đã khóa'}</b></div></div></div>
-  <div class="card"><h3>Hóa đơn cần xử lý</h3>${pending.length ? pending.map((item) => `<p><b>${esc(item.id)}</b> · ${esc(item.roomId)} · ${money(item.due)}</p>`).join('') : '<div class="empty">Không có hóa đơn chờ thanh toán.</div>'}</div></div>`;
+  <div class="card"><h3>Hóa đơn cần xử lý</h3>${pending.length ? pending.map((item) => `<p><b>${esc(item.id)}</b> · ${esc(item.roomId)} · ${money(item.due)}</p>`).join('') : '<div class="empty">Không có hóa đơn chờ thanh toán.</div>'}</div></div>${renderRoomPerformance(unlocked)}`;
 }
 
 function renderRooms() {
@@ -570,6 +579,10 @@ document.addEventListener('submit', async (event) => {
     finally { setBusy(false); }
   }
   if (formId === 'settingsForm') { await mutate((state) => { const next = deepClone(state); next.settings = { ...next.settings, ...data, financeLocked: data.financeLocked === 'true', vatRate: Number(data.vatRate || 0), serviceFeeRate: Number(data.serviceFeeRate || 0), financeSessionMinutes: Number(data.financeSessionMinutes || 30), financeMaxAttempts: Number(data.financeMaxAttempts || 5), financeLockMinutes: Number(data.financeLockMinutes || 15) }; next.meta.revision += 1; next.meta.updatedAt = new Date().toISOString(); return next; }, 'Đã lưu cài đặt.'); }
+  if (formId === 'performanceForm') {
+    try { roomPerformance(ui.state, data.from, data.to); ui.performance = { from: data.from, to: data.to }; render(); }
+    catch (error) { toast(error.message, true); }
+  }
   if (formId === 'roomTypeEditForm') {
     const previousName = ui.state.rates.find((rate) => rate.id === data.id)?.roomType;
     const saved = await mutate((state) => renameRoomType(state, data.id, data.roomType), 'Đã cập nhật loại phòng.');
