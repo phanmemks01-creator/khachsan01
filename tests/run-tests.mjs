@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createInitialState, validateState } from '../src/model.js';
 import {
   addCharge, adjustInvoice, availableRooms, checkIn, checkOut, completeMaintenance, createBooking, createMaintenance,
-  dashboard, extendStay, financeReport, invoiceGroupId, nights, payInvoice, payInvoiceGroup, receiveStock, refundSurplus, roomAvailable,
+  dashboard, directCheckIn, extendStay, financeReport, invoiceGroupId, nights, payInvoice, payInvoiceGroup, receiveStock, refundSurplus, roomAvailable,
   transferRoom, updateHousekeeping
 } from '../src/domain.js';
 import healthHandler from '../api/health.js';
@@ -159,6 +159,29 @@ await test('Kho dữ liệu khởi tạo Supabase trống bằng bản cục b�
   } finally {
     globalThis.localStorage = previous.localStorage; globalThis.sessionStorage = previous.sessionStorage; globalThis.fetch = previous.fetch;
   }
+});
+
+await test('Nhận trực tiếp nhiều phòng: một nhóm, đúng tiền cọc và giờ nhận thực tế', () => {
+  const initial = createInitialState(); const ids = initial.rooms.slice(0, 2).map((room) => room.id);
+  const next = directCheckIn(initial, { roomIds: ids, guestName: 'Khách trực tiếp', guestCount: 1, deposit: 100000, priceMode: 'Theo giờ', departure: '2026-10-11T12:00:00+07:00' }, '2026-10-11T10:00:00+07:00');
+  assert.equal(validateState(next), true); assert.equal(next.stays.length, 2);
+  assert.ok(next.bookings.every((item) => item.status === 'Đã nhận phòng'));
+  assert.ok(next.stays.every((item) => item.checkIn === '2026-10-11T10:00:00+07:00' && item.priceMode === 'Theo giờ'));
+  assert.equal(next.stays.reduce((sum, item) => sum + item.deposit, 0), 100000);
+  assert.equal(new Set(next.bookings.map((item) => item.groupId)).size, 1);
+  assert.equal(initial.bookings.length, 0);
+});
+await test('Nhận trực tiếp chặn phòng chưa dọn, quá giờ trả và trùng lịch; không lưu dở dang', () => {
+  const initial = createInitialState(); const [first, second] = initial.rooms;
+  const payload = { roomIds: [first.id, second.id], guestName: 'Khách', guestCount: 1, departure: '2026-10-11T12:00:00+07:00' };
+  second.status = 'Chờ vệ sinh'; const before = JSON.stringify(initial);
+  assert.throws(() => directCheckIn(initial, payload, '2026-10-11T10:00:00+07:00'), /chưa sẵn sàng/);
+  assert.equal(JSON.stringify(initial), before);
+  second.status = 'Phòng trống';
+  assert.throws(() => directCheckIn(initial, payload, '2026-10-11T13:00:00+07:00'), /Giờ trả/);
+  const booked = createBooking(initial, { ...payload, roomIds: [first.id], arrival: '2026-10-11T09:00:00+07:00' });
+  assert.throws(() => directCheckIn(booked, payload, '2026-10-11T10:00:00+07:00'), /không còn trống/);
+  assert.equal(booked.stays.length, 0);
 });
 
 const failures = tests.filter((item) => !item.ok);

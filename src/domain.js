@@ -168,6 +168,26 @@ export function createBooking(current, payload) {
   return touch(state);
 }
 
+export function directCheckIn(current, payload, actualCheckIn = new Date().toISOString()) {
+  const arrival = asDate(actualCheckIn);
+  const departure = asDate(payload.departure);
+  if (!Number.isFinite(+arrival) || !Number.isFinite(+departure) || departure <= arrival) throw new Error('Giờ trả dự kiến phải sau thời điểm nhận phòng hiện tại.');
+  const roomIds = [...new Set(payload.roomIds || [])];
+  for (const roomId of roomIds) {
+    const room = current.rooms.find((item) => item.id === roomId && item.active);
+    if (!room || ['Đang ở', 'Chờ vệ sinh', 'Bảo trì', 'Tạm khóa'].includes(room.status)
+      || current.stays.some((stay) => stay.roomId === roomId && stay.status === 'Đang ở')
+      || current.housekeeping.some((task) => task.roomId === roomId && !['Hoàn thành', 'Đã hủy'].includes(task.status))) {
+      throw new Error(`Phòng ${room?.name || roomId} chưa sẵn sàng nhận khách trực tiếp.`);
+    }
+  }
+  const existingIds = new Set(current.bookings.map((booking) => booking.id));
+  let next = createBooking(current, { ...payload, roomIds, arrival: actualCheckIn });
+  const bookingIds = next.bookings.filter((booking) => !existingIds.has(booking.id)).map((booking) => booking.id);
+  for (const bookingId of bookingIds) next = checkIn(next, bookingId, actualCheckIn);
+  return next;
+}
+
 export function cancelBooking(current, bookingId) {
   const state = deepClone(current);
   const booking = state.bookings.find((item) => item.id === bookingId);

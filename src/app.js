@@ -2,7 +2,7 @@ import { HotelStore } from './store.js';
 import { APP_VERSION, deepClone, id, isoLocal, validateState } from './model.js';
 import {
   addCharge, adjustInvoice, availableRooms, cancelBooking, checkIn, checkOut, completeMaintenance, createBooking,
-  createMaintenance, dashboard, roomPerformance, extendStay, financeReport, invoiceGroupId, normalize, payInvoice, payInvoiceGroup, receiveStock, refundSurplus,
+  createMaintenance, directCheckIn, dashboard, roomPerformance, extendStay, financeReport, invoiceGroupId, normalize, payInvoice, payInvoiceGroup, receiveStock, refundSurplus,
   roomPriceQuote, roomRate, transferRoom, updateHousekeeping
 } from './domain.js';
 
@@ -262,7 +262,7 @@ function refreshListFilter(scope) {
 function renderBookings() {
   const b = ui.booking; const floors = [...new Set(ui.state.rooms.map((room) => room.floor))].sort(); const types = [...new Set(ui.state.rooms.map((room) => room.roomType))];
   return `<div class="card"><form id="bookingForm"><div class="form-grid"><div class="field span-2"><label>Loại tính giá phòng *</label><select name="priceMode" id="bookingPriceMode" required><option ${b.priceMode === 'Theo giờ' ? 'selected' : ''}>Theo giờ</option><option ${b.priceMode === 'Qua đêm' ? 'selected' : ''}>Qua đêm</option><option ${b.priceMode === 'Theo ngày' ? 'selected' : ''}>Theo ngày</option></select><span class="sub">Chọn ngay từ lúc đặt phòng; cách tính này được chốt theo phiếu đặt.</span></div><div class="field"><label>Nhận dự kiến *</label><input name="arrival" id="bookingArrival" type="datetime-local" value="${esc(b.arrival)}" required></div><div class="field"><label>Trả dự kiến *</label><input name="departure" id="bookingDeparture" type="datetime-local" value="${esc(b.departure)}" required></div><div class="field"><label>Gõ tìm phòng</label><input id="bookingQuery" value="${esc(b.query)}" placeholder="Ví dụ: phòng đơn"></div><div class="field"><label>Tầng</label><select id="bookingFloor"><option value="">Tất cả</option>${floors.map((item) => `<option ${String(item) === b.floor ? 'selected' : ''}>${item}</option>`).join('')}</select></div><div class="field"><label>Loại phòng</label><select id="bookingType"><option value="">Tất cả</option>${types.map((item) => `<option ${item === b.roomType ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></div><div class="field"><label>Tên khách *</label><input name="guestName" required></div><div class="field"><label>Số điện thoại</label><input name="phone"></div><div class="field"><label>Số khách / phòng</label><input name="guestCount" type="number" min="1" value="1"></div><div class="field"><label>Tổng tiền cọc</label><input name="deposit" type="text" inputmode="numeric" data-money min="0" value="0"></div><div class="field"><label>Kênh đặt</label><select name="channel"><option>Trực tiếp</option><option>Điện thoại</option><option>Website</option><option>Đại lý</option></select></div><div class="field span-2"><label>Ghi chú</label><input name="note"></div></div>
-  <div id="bookingPriceTable">${bookingPriceTableHtml()}</div><div class="section-head"><div><h2>Chọn phòng còn trống</h2><p id="bookingResultCount"></p></div></div>${bookingTypeSummary()}<div id="bookingSelected" class="selected-list"></div><div id="bookingRoomGrid" class="room-grid">${bookingRoomCards()}</div><div class="actions"><button class="button primary">Lưu đặt phòng</button></div></form></div>
+  <div id="bookingPriceTable">${bookingPriceTableHtml()}</div><div class="section-head"><div><h2>Chọn phòng còn trống</h2><p id="bookingResultCount"></p></div></div>${bookingTypeSummary()}<div id="bookingSelected" class="selected-list"></div><div id="bookingRoomGrid" class="room-grid">${bookingRoomCards()}</div><p class="sub">Nhận phòng trực tiếp: giờ nhận là thời điểm bấm nút; áp dụng loại tính giá và giờ trả dự kiến đã chọn.</p><div class="actions"><button type="submit" class="button primary">Lưu đặt phòng</button><button type="submit" class="button success" name="bookingAction" value="direct-checkin">Nhận phòng trực tiếp</button></div></form></div>
   <div class="section-head"><div><h2>Danh sách đặt phòng</h2><p>Mỗi phòng là một dòng; loại tính giá được khóa ngay từ phiếu đặt để tránh nhầm khi trả phòng.</p></div></div>${listFilterToolbar('bookings', 'Ngày đặt / lưu trú')}<div id="bookingListWrap">${bookingTable()}</div>`;
 }
 
@@ -521,7 +521,13 @@ document.addEventListener('submit', async (event) => {
   event.preventDefault(); const form = event.target;
   // Named controls (e.g. name="id") can shadow native form properties.
   const formId = form.getAttribute('id'); const data = formData(form);
-  if (formId === 'bookingForm') { data.roomIds = [...ui.booking.selected]; data.arrival = ui.booking.arrival; data.departure = ui.booking.departure; data.priceMode = ui.booking.priceMode; await mutate((state) => createBooking(state, data), 'Đã lưu đặt phòng và chốt loại tính giá.'); ui.booking.selected.clear(); }
+  if (formId === 'bookingForm') {
+    data.roomIds = [...ui.booking.selected]; data.arrival = ui.booking.arrival; data.departure = ui.booking.departure; data.priceMode = ui.booking.priceMode;
+    const direct = event.submitter?.value === 'direct-checkin';
+    const receivedAt = new Date().toISOString();
+    const saved = await mutate((state) => direct ? directCheckIn(state, data, receivedAt) : createBooking(state, data), direct ? 'Đã nhận phòng trực tiếp. Phòng đã chuyển sang Đang ở.' : 'Đã lưu đặt phòng và chốt loại tính giá.');
+    if (saved) { ui.booking.selected.clear(); if (direct) navigate('stays'); else render(); }
+  }
   if (formId === 'chargeForm') {
     const items = $$('[data-charge-row]', form).map((row) => ({ serviceId: $('select[name="serviceId"]', row)?.value || '', quantity: $('input[name="quantity"]', row)?.value || '1' })).filter((item) => item.serviceId);
     if (!items.length) return toast('Vui lòng chọn ít nhất một dịch vụ.', true);
