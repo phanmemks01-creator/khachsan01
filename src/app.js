@@ -190,8 +190,32 @@ function mapBookingModal(roomId) {
   const arrival = isoLocal();
   const departure = isoLocal(new Date(Date.now() + 86400000));
   const rate = ui.state.rates.find((item) => item.active && item.roomType === room.roomType);
-  openModal(`<h2>Đặt / nhận ${esc(room.name)}</h2><p><b>Tầng ${esc(room.floor)} · ${esc(room.roomType)}</b> · ${esc(room.status)}</p><p class="sub">Giá ngày thường: ${money(rate?.weekday)} · Qua đêm: ${money(rate?.overnight ?? rate?.weekday)} · Giờ đầu: ${money(rate?.hourlyFirst)}</p><form id="mapBookingForm"><input type="hidden" name="roomId" value="${esc(room.id)}"><div class="form-grid"><div class="field span-2"><label>Tên khách *</label><input name="guestName" required></div><div class="field"><label>Số điện thoại</label><input name="phone" type="tel"></div><div class="field"><label>Số khách</label><input name="guestCount" type="number" min="1" max="${room.capacity}" value="1" required></div><div class="field span-2"><label>Loại tính giá *</label><select name="priceMode"><option>Theo ngày</option><option>Qua đêm</option><option>Theo giờ</option></select></div><div class="field"><label>Nhận dự kiến *</label><input name="arrival" type="datetime-local" value="${esc(arrival)}" required></div><div class="field"><label>Trả dự kiến *</label><input name="departure" type="datetime-local" value="${esc(departure)}" required></div><div class="field"><label>Tiền cọc</label><input name="deposit" type="text" inputmode="numeric" data-money value="0"></div><div class="field"><label>Kênh đặt</label><select name="channel"><option>Trực tiếp</option><option>Điện thoại</option><option>Website</option><option>Đại lý</option></select></div><div class="field span-4"><label>Ghi chú</label><input name="note"></div></div><p class="sub">Lưu đặt phòng dùng giờ nhận dự kiến. Nhận phòng trực tiếp dùng thời điểm bấm nút. Hệ thống kiểm tra lịch trống trước khi lưu.</p><div class="actions"><button type="button" class="button" data-action="close-modal">Hủy</button><button type="submit" class="button primary">Lưu đặt phòng</button><button type="submit" class="button success" value="direct-checkin">Nhận phòng trực tiếp</button></div></form>`);
+  openModal(`<h2>Đặt / nhận ${esc(room.name)}</h2><p><b>Tầng ${esc(room.floor)} · ${esc(room.roomType)}</b> · ${esc(room.status)}</p><div style="padding:12px;background:#eff6ff;border:1px solid #bae6fd;border-radius:10px;margin:12px 0"><p style="margin:0 0 8px">Ngày thường: <b>${money(rate?.weekday)}</b> · Cuối tuần: <b>${money(rate?.weekend)}</b> · Qua đêm: <b>${money(rate?.overnight ?? rate?.weekday)}</b></p><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px"><span>Giờ đầu: <b>${money(rate?.hourlyFirst)}</b></span><span>Giờ thứ 2: <b>${money(rate?.hourlySecond)}</b></span><span>Giờ thứ 3: <b>${money(rate?.hourlyThird)}</b></span><span>Từ giờ thứ 4: <b>${money(rate?.hourlyFromFourth)}/giờ</b></span></div><p class="sub" style="margin:8px 0 0">Tiền theo giờ cộng dồn từng giờ; phần lẻ giờ làm tròn lên theo cách tính hiện tại.</p></div><form id="mapBookingForm"><input type="hidden" name="roomId" value="${esc(room.id)}"><div class="form-grid"><div class="field span-2"><label>Tên khách *</label><input name="guestName" required></div><div class="field"><label>Số điện thoại</label><input name="phone" type="tel"></div><div class="field"><label>Số khách</label><input name="guestCount" type="number" min="1" max="${room.capacity}" value="1" required></div><div class="field span-2"><label>Loại tính giá *</label><select name="priceMode"><option>Theo ngày</option><option>Qua đêm</option><option>Theo giờ</option></select></div><div class="field"><label>Nhận dự kiến *</label><input name="arrival" type="datetime-local" value="${esc(arrival)}" required></div><div class="field"><label>Trả dự kiến *</label><input name="departure" type="datetime-local" value="${esc(departure)}" required></div><div class="field span-2"><label for="mapRoomEstimate">Tiền phòng dự kiến</label><input id="mapRoomEstimate" readonly aria-describedby="mapRoomEstimateDetail" style="font-size:20px;font-weight:800;color:#0369a1;background:#eff6ff"><span id="mapRoomEstimateDetail" class="sub" aria-live="polite"></span></div><div class="field"><label>Tiền cọc</label><input name="deposit" type="text" inputmode="numeric" data-money value="0"></div><div class="field"><label>Kênh đặt</label><select name="channel"><option>Trực tiếp</option><option>Điện thoại</option><option>Website</option><option>Đại lý</option></select></div><div class="field span-4"><label>Ghi chú</label><input name="note"></div></div><p class="sub">Lưu đặt phòng dùng giờ nhận dự kiến. Nhận phòng trực tiếp dùng thời điểm bấm nút. Hệ thống kiểm tra lịch trống trước khi lưu.</p><div class="actions"><button type="button" class="button" data-action="close-modal">Hủy</button><button type="submit" class="button primary">Lưu đặt phòng</button><button type="submit" class="button success" value="direct-checkin">Nhận phòng trực tiếp</button></div></form>`);
+  refreshMapRoomEstimate();
 }
+
+function refreshMapRoomEstimate() {
+  const form = $('#mapBookingForm');
+  if (!form) return;
+  const amount = $('#mapRoomEstimate', form);
+  const detail = $('#mapRoomEstimateDetail', form);
+  const value = (name) => $(`[name="${name}"]`, form)?.value || '';
+  try {
+    const room = ui.state.rooms.find((item) => item.id === value('roomId') && item.active);
+    if (!room || !ui.state.rates.some((rate) => rate.active && rate.roomType === room.roomType)) throw new Error('Phòng chưa có bảng giá hoạt động.');
+    if (!value('arrival') || !value('departure')) throw new Error('Nhập đủ giờ nhận và giờ trả để xem tiền dự kiến.');
+    const quote = roomPriceQuote(ui.state, room, value('arrival'), value('departure'), value('priceMode'));
+    amount.value = money(quote.total);
+    detail.textContent = `${quote.count} ${quote.unit} · ${quote.priceMode}. Chỉ gồm tiền phòng, chưa trừ cọc, chưa gồm dịch vụ, phụ thu, thuế và giảm giá.`;
+    detail.className = 'sub';
+  } catch (error) {
+    amount.value = '—'; detail.textContent = error.message; detail.className = 'sub error-text';
+  }
+}
+
+for (const eventName of ['input', 'change']) document.addEventListener(eventName, (event) => {
+  if (event.target.closest('#mapBookingForm') && ['arrival', 'departure', 'priceMode'].includes(event.target.name)) refreshMapRoomEstimate();
+});
 
 function bookingRoomCards() {
   const b = ui.booking; const rooms = availableRooms(ui.state, b.arrival, b.departure, b.query, { floor: b.floor, roomType: b.roomType }).filter((room) => !b.selected.has(room.id));
