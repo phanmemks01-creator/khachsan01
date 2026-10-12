@@ -4,6 +4,39 @@ const money = (value) => Math.max(0, Math.round(Number(value || 0) || 0));
 const asDate = (value) => value instanceof Date ? value : new Date(value);
 const overlap = (aStart, aEnd, bStart, bEnd) => asDate(aStart) < asDate(bEnd) && asDate(aEnd) > asDate(bStart);
 
+// Store a name snapshot on each operation; directory edits never rewrite history.
+export function employeeSnapshot(state, employeeId) {
+  if (!employeeId && !(state.employees || []).length) return { id: '', name: '' };
+  const employee = (state.employees || []).find((item) => item.id === employeeId && item.active !== false);
+  if (!employee) throw new Error('Vui lòng chọn nhân viên đang làm việc.');
+  return { id: employee.id, name: employee.name };
+}
+
+export function saveEmployee(current, employeeId, name, remove = false) {
+  const state = deepClone(current);
+  state.employees ||= [];
+  const employee = state.employees.find((item) => item.id === employeeId);
+  if (employeeId && !employee) throw new Error('Không tìm thấy nhân viên.');
+  if (remove && !employee) throw new Error('Không tìm thấy nhân viên.');
+  if (remove) {
+    employee.active = false;
+  } else {
+    name = String(name || '').trim().replace(/\s+/g, ' ');
+    if (!name) throw new Error('Vui lòng nhập tên nhân viên.');
+    if (state.employees.some((item) => item.id !== employeeId && item.active !== false && normalize(item.name) === normalize(name))) throw new Error('Tên nhân viên đã tồn tại.');
+    if (employee) Object.assign(employee, { name, active: true });
+    else state.employees.push({ id: id('NV'), name, active: true });
+  }
+  audit(state, remove ? 'Xóa nhân viên khỏi danh sách chọn' : 'Lưu nhân viên', 'NHAN_VIEN', employeeId || '', name || employee?.name || '');
+  return touch(state);
+}
+
+export function financeDate(value) {
+  if (!value) return '';
+  const date = new Date(/T/.test(value) && !/(Z|[+-]\d{2}:?\d{2})$/.test(value) ? value + '+07:00' : value);
+  return Number.isFinite(+date) ? new Date(+date + 7 * 3600000).toISOString().slice(0, 10) : '';
+}
+
 export function nights(start, end) {
   const diff = asDate(end).getTime() - asDate(start).getTime();
   if (!Number.isFinite(diff) || diff <= 0) return 1;
@@ -184,7 +217,7 @@ export function directCheckIn(current, payload, actualCheckIn = new Date().toISO
   const existingIds = new Set(current.bookings.map((booking) => booking.id));
   let next = createBooking(current, { ...payload, roomIds, arrival: actualCheckIn });
   const bookingIds = next.bookings.filter((booking) => !existingIds.has(booking.id)).map((booking) => booking.id);
-  for (const bookingId of bookingIds) next = checkIn(next, bookingId, actualCheckIn);
+  for (const bookingId of bookingIds) next = checkIn(next, bookingId, actualCheckIn, payload.employeeId);
   return next;
 }
 
@@ -198,7 +231,8 @@ export function cancelBooking(current, bookingId) {
   return touch(state);
 }
 
-export function checkIn(current, bookingId, actualCheckIn = new Date().toISOString()) {
+export function checkIn(current, bookingId, actualCheckIn = new Date().toISOString(), employeeId = '') {
+  const employee = employeeSnapshot(current, employeeId);
   const state = deepClone(current);
   const booking = state.bookings.find((item) => item.id === bookingId);
   if (!booking || !['Chờ xác nhận', 'Đã xác nhận'].includes(booking.status)) throw new Error('Phiếu đặt không hợp lệ để nhận phòng.');
@@ -208,6 +242,7 @@ export function checkIn(current, bookingId, actualCheckIn = new Date().toISOStri
   const stay = {
     id: id('LT'), bookingId: booking.id, roomId: room.id, roomType: room.roomType, rateId: booking.rateId,
     guestId: booking.guestId, guestName: booking.guestName, phone: booking.phone, guestCount: booking.guestCount,
+    checkInEmployeeId: employee.id, checkInEmployeeName: employee.name,
     checkIn: actualCheckIn, expectedCheckout: booking.departure, checkout: '', nights: 1, averageRate: booking.expectedRate,
     priceMode: booking.priceMode || 'Theo ngày', rateSnapshot: booking.rateSnapshot || rateSnapshotFor(state, room),
     priceBreakdown: deepClone(booking.priceBreakdown || []),
@@ -326,6 +361,7 @@ function calculateRoomAmount(state, stay, checkout) {
 }
 
 export function checkOut(current, stayId, options = {}) {
+  const employee = employeeSnapshot(current, options.employeeId);
   const state = deepClone(current);
   const stay = state.stays.find((item) => item.id === stayId && item.status === 'Đang ở');
   if (!stay) throw new Error('Lượt lưu trú không hợp lệ để trả phòng.');
@@ -351,6 +387,8 @@ export function checkOut(current, stayId, options = {}) {
   if (finalRoomHistory.length) finalRoomHistory[finalRoomHistory.length - 1].to = checkout;
   const invoice = {
     id: id('HD'), createdAt: new Date().toISOString(), stayId: stay.id, bookingId: stay.bookingId,
+    checkInEmployeeId: stay.checkInEmployeeId || '', checkInEmployeeName: stay.checkInEmployeeName || '',
+    checkOutEmployeeId: employee.id, checkOutEmployeeName: employee.name,
     groupId: booking?.groupId || '', guestId: stay.guestId || booking?.guestId || '', phone: stay.phone || booking?.phone || '',
     roomId: stay.roomId, roomHistory: finalRoomHistory, guestName: stay.guestName,
     checkIn: stay.checkIn, checkout, nights: roomCalculation.count, averageRate: roomCalculation.average,
@@ -369,6 +407,7 @@ export function checkOut(current, stayId, options = {}) {
     state.invoiceLines.push({ invoiceId: invoice.id, type: charge.type, itemId: charge.serviceId, name: charge.name, unit: charge.unit, quantity: charge.quantity, unitPrice: charge.unitPrice, amount: charge.amount, note: charge.note });
   });
   if (finalRoomHistory.length) stay.roomHistory = deepClone(finalRoomHistory);
+  stay.checkOutEmployeeId = employee.id; stay.checkOutEmployeeName = employee.name;
   stay.checkout = checkout; stay.nights = roomCalculation.count; stay.averageRate = roomCalculation.average; stay.roomAmount = roomCalculation.total; stay.status = 'Đã trả phòng';
   if (booking) booking.status = 'Đã trả phòng';
   const room = state.rooms.find((item) => item.id === stay.roomId); if (room) room.status = 'Chờ vệ sinh';
@@ -440,13 +479,15 @@ export function adjustInvoice(current, invoiceId, payload = {}) {
 }
 
 export function payInvoice(current, invoiceId, payload) {
+  const employee = employeeSnapshot(current, payload.employeeId);
   const state = deepClone(current);
   const invoice = state.invoices.find((item) => item.id === invoiceId && item.status !== 'Đã hủy');
   if (!invoice) throw new Error('Không tìm thấy hóa đơn.');
   const amount = money(payload.amount);
   if (!amount) throw new Error('Số tiền thu phải lớn hơn 0.');
-  state.receipts.unshift({ id: id('PT'), at: new Date().toISOString(), type: 'Thu thanh toán', invoiceId: invoice.id, roomId: invoice.roomId, guestName: invoice.guestName, amount, method: payload.method || 'Tiền mặt', status: 'Đã ghi nhận', note: payload.note || '' });
+  state.receipts.unshift({ id: id('PT'), at: new Date().toISOString(), type: 'Thu thanh toán', employeeId: employee.id, employeeName: employee.name, invoiceId: invoice.id, roomId: invoice.roomId, guestName: invoice.guestName, amount, method: payload.method || 'Tiền mặt', status: 'Đã ghi nhận', note: payload.note || '' });
   invoice.paid = money(invoice.paid) + amount;
+  invoice.cashierId = employee.id; invoice.cashierName = employee.name;
   invoice.lastMethod = payload.method || 'Tiền mặt';
   refreshInvoicePayment(invoice);
   audit(state, 'Thu tiền hóa đơn', 'PHIEU_THU', invoice.id, `${amount} · ${invoice.lastMethod}`);
@@ -454,6 +495,7 @@ export function payInvoice(current, invoiceId, payload) {
 }
 
 export function payInvoiceGroup(current, invoiceIds, payload = {}) {
+  const employee = employeeSnapshot(current, payload.employeeId);
   const state = deepClone(current);
   const selectedIds = [...new Set(invoiceIds || [])];
   if (!selectedIds.length) throw new Error('Vui lòng chọn ít nhất một hóa đơn để thanh toán gộp.');
@@ -472,11 +514,12 @@ export function payInvoiceGroup(current, invoiceIds, payload = {}) {
     const allocated = Math.min(remaining, money(invoice.due));
     if (!allocated) return;
     state.receipts.unshift({
-      id: id('PT'), paymentGroupId, bookingGroupId: groupIds[0], at: new Date().toISOString(), type: 'Thu thanh toán gộp',
+      id: id('PT'), paymentGroupId, bookingGroupId: groupIds[0], at: new Date().toISOString(), type: 'Thu thanh toán gộp', employeeId: employee.id, employeeName: employee.name,
       invoiceId: invoice.id, roomId: invoice.roomId, guestName: invoice.guestName, amount: allocated,
       method: payload.method || 'Tiền mặt', status: 'Đã ghi nhận', note: payload.note || ''
     });
     invoice.paid = money(invoice.paid) + allocated;
+    invoice.cashierId = employee.id; invoice.cashierName = employee.name;
     invoice.lastMethod = payload.method || 'Tiền mặt';
     refreshInvoicePayment(invoice);
     remaining -= allocated;
@@ -485,12 +528,13 @@ export function payInvoiceGroup(current, invoiceIds, payload = {}) {
   return touch(state);
 }
 
-export function refundSurplus(current, invoiceId, method = 'Tiền mặt') {
+export function refundSurplus(current, invoiceId, method = 'Tiền mặt', employeeId = '') {
+  const employee = employeeSnapshot(current, employeeId);
   const state = deepClone(current);
   const invoice = state.invoices.find((item) => item.id === invoiceId);
   if (!invoice || money(invoice.surplus) <= 0) throw new Error('Hóa đơn không có tiền thừa cần hoàn.');
   const amount = money(invoice.surplus);
-  state.receipts.unshift({ id: id('PH'), at: new Date().toISOString(), type: 'Hoàn thanh toán', invoiceId: invoice.id, roomId: invoice.roomId, guestName: invoice.guestName, amount, method, status: 'Đã ghi nhận', note: 'Hoàn tiền thừa' });
+  state.receipts.unshift({ id: id('PH'), at: new Date().toISOString(), type: 'Hoàn thanh toán', employeeId: employee.id, employeeName: employee.name, invoiceId: invoice.id, roomId: invoice.roomId, guestName: invoice.guestName, amount, method, status: 'Đã ghi nhận', note: 'Hoàn tiền thừa' });
   invoice.refunded = money(invoice.refunded) + amount; invoice.surplus = 0; invoice.status = invoice.due === 0 ? 'Đã thanh toán' : 'Chờ thanh toán'; invoice.paidAt = invoice.status === 'Đã thanh toán' ? new Date().toISOString() : '';
   audit(state, 'Hoàn tiền thừa', 'PHIEU_THU', invoice.id, `${amount} · ${method}`);
   return touch(state);
@@ -552,12 +596,24 @@ export function dashboard(state) {
 }
 
 export function financeReport(state, from, to) {
-  const start = from ? new Date(`${from}T00:00:00`).getTime() : 0;
-  const end = to ? new Date(`${to}T23:59:59`).getTime() : Number.MAX_SAFE_INTEGER;
-  const invoices = state.invoices.filter((item) => item.status === 'Đã thanh toán' && asDate(item.paidAt || item.createdAt).getTime() >= start && asDate(item.paidAt || item.createdAt).getTime() <= end);
-  const receipts = state.receipts.filter((item) => asDate(item.at).getTime() >= start && asDate(item.at).getTime() <= end);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(to || '') || from > to) throw new Error('Vui lòng chọn khoảng ngày hợp lệ (từ ngày không sau đến ngày).');
+  const start = Date.parse(from + 'T00:00:00+07:00');
+  const end = Date.parse(to + 'T00:00:00+07:00');
+  if (!Number.isFinite(start) || !Number.isFinite(end) || financeDate(new Date(start).toISOString()) !== from || financeDate(new Date(end).toISOString()) !== to || (end - start) / 86400000 > 3659) throw new Error('Khoảng báo cáo tối đa 10 năm.');
+  const within = (value) => { const day = financeDate(value); return day >= from && day <= to; };
+  const invoices = state.invoices.filter((item) => item.status === 'Đã thanh toán' && within(item.paidAt || item.createdAt));
+  const receipts = state.receipts.filter((item) => within(item.at));
   const byDay = {};
-  invoices.forEach((item) => { const key = String(item.paidAt || item.createdAt).slice(0, 10); byDay[key] = (byDay[key] || 0) + money(item.total); });
+  for (let at = start; at <= end; at += 86400000) {
+    const date = financeDate(new Date(at).toISOString());
+    byDay[date] = { date, count: 0, amount: 0, room: 0, service: 0, surcharge: 0, discount: 0, serviceFee: 0, vat: 0, cash: 0 };
+  }
+  invoices.forEach((item) => {
+    const row = byDay[financeDate(item.paidAt || item.createdAt)];
+    row.count++; row.amount += money(item.total); row.room += money(item.roomAmount); row.service += money(item.serviceAmount);
+    row.surcharge += money(item.surcharge); row.discount += money(item.discount); row.serviceFee += money(item.serviceFee); row.vat += money(item.vat);
+  });
+  receipts.forEach((item) => { byDay[financeDate(item.at)].cash += String(item.type || '').startsWith('Hoàn') ? -money(item.amount) : money(item.amount); });
   return {
     invoices, receipts,
     invoiceCount: invoices.length,
@@ -567,9 +623,9 @@ export function financeReport(state, from, to) {
     surcharge: invoices.reduce((sum, item) => sum + money(item.surcharge), 0),
     discounts: invoices.reduce((sum, item) => sum + money(item.discount), 0),
     vat: invoices.reduce((sum, item) => sum + money(item.vat), 0),
-    cashReceived: receipts.reduce((sum, item) => sum + (item.type.startsWith('Hoàn') ? -money(item.amount) : money(item.amount)), 0),
+    cashReceived: receipts.reduce((sum, item) => sum + (String(item.type || '').startsWith('Hoàn') ? -money(item.amount) : money(item.amount)), 0),
     outstanding: state.invoices.reduce((sum, item) => sum + (item.status === 'Chờ thanh toán' ? money(item.due) : 0), 0),
-    byDay: Object.entries(byDay).sort().map(([date, amount]) => ({ date, amount }))
+    byDay: Object.values(byDay)
   };
 }
 

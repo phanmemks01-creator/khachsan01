@@ -11,7 +11,7 @@ for (const file of ["index.html", "styles.css"]) {
   await copyFile(resolve(root, file), resolve(output, file));
 }
 
-for (const file of ["app.js", "domain.js", "model.js", "store.js"]) {
+for (const file of ["excel.js", "app.js", "domain.js", "model.js", "store.js"]) {
   await copyFile(resolve(root, "src", file), resolve(output, "src", file));
 }
 

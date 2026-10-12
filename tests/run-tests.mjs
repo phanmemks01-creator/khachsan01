@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createInitialState, validateState } from '../src/model.js';
 import {
-  addCharge, adjustInvoice, availableRooms, checkIn, checkOut, completeMaintenance, createBooking, createMaintenance,
+  saveEmployee, addCharge, adjustInvoice, availableRooms, checkIn, checkOut, completeMaintenance, createBooking, createMaintenance,
   dashboard, directCheckIn, extendStay, financeReport, invoiceGroupId, nights, payInvoice, payInvoiceGroup, receiveStock, refundSurplus, roomAvailable,
   transferRoom, updateHousekeeping
 } from '../src/domain.js';
@@ -182,6 +182,55 @@ await test('Nhận trực tiếp chặn phòng chưa dọn, quá giờ trả và
   const booked = createBooking(initial, { ...payload, roomIds: [first.id], arrival: '2026-10-11T09:00:00+07:00' });
   assert.throws(() => directCheckIn(booked, payload, '2026-10-11T10:00:00+07:00'), /không còn trống/);
   assert.equal(booked.stays.length, 0);
+});
+
+await test('Nhân viên: sửa/xóa bảo toàn tên nhận, trả và từng phiếu thu/hoàn', () => {
+  let s = saveEmployee(createInitialState(), '', '  Lễ tân An  ');
+  const a = s.employees[0].id;
+  s = saveEmployee(s, '', 'Thu ngân Bình'); const b = s.employees[1].id;
+  assert.throws(() => saveEmployee(s, '', 'le tan an'), /tồn tại/);
+  assert.throws(() => directCheckIn(s, { roomIds: ['P01'], guestName: 'Khách', departure: '2026-10-12T12:00+07:00' }, '2026-10-12T10:00+07:00'), /nhân viên/);
+  assert.equal(s.stays.length, 0);
+  s = directCheckIn(s, { roomIds: ['P01'], employeeId: a, guestName: 'Khách', departure: '2026-10-12T12:00+07:00', priceMode: 'Theo giờ' }, '2026-10-12T10:00+07:00');
+  s = checkOut(s, s.stays[0].id, { checkout: '2026-10-12T12:00+07:00', employeeId: b });
+  const invoiceId = s.invoices[0].id;
+  s = payInvoice(s, invoiceId, { amount: 50000, employeeId: a });
+  s = payInvoice(s, invoiceId, { amount: s.invoices[0].due + 10000, employeeId: b });
+  s = refundSurplus(s, invoiceId, 'Tiền mặt', b);
+  s = saveEmployee(s, a, 'An mới'); s = saveEmployee(s, b, '', true);
+  assert.equal(s.stays[0].checkInEmployeeName, 'Lễ tân An');
+  assert.equal(s.invoices[0].checkOutEmployeeName, 'Thu ngân Bình');
+  assert.equal(s.invoices[0].cashierName, 'Thu ngân Bình');
+  assert.equal(s.receipts.find((r) => r.amount === 50000).employeeName, 'Lễ tân An');
+  assert.equal(s.receipts[0].employeeName, 'Thu ngân Bình');
+  assert.throws(() => payInvoice(s, invoiceId, { amount: 1, employeeId: b }), /nhân viên/);
+  assert.equal(validateState(s), true);
+});
+await test('Thanh toán gộp ghi đúng thu ngân trên mỗi phiếu thu', () => {
+  let s = saveEmployee(createInitialState(), '', 'Thu ngân'); const employeeId = s.employees[0].id;
+  s = directCheckIn(s, { roomIds: ['P01', 'P02'], guestName: 'Đoàn', employeeId, priceMode: 'Theo giờ', departure: '2026-10-12T12:00+07:00' }, '2026-10-12T10:00+07:00');
+  for (const stay of s.stays) s = checkOut(s, stay.id, { checkout: '2026-10-12T12:00+07:00', employeeId });
+  s = payInvoiceGroup(s, s.invoices.map((i) => i.id), { employeeId, amount: s.invoices.reduce((n, i) => n + i.due, 0) });
+  assert.equal(s.receipts.length, 2); assert.ok(s.receipts.every((r) => r.employeeName === 'Thu ngân'));
+});
+await test('Báo cáo ngày Việt Nam: biên nửa đêm, hoàn tiền, ngày trống và số tổng', () => {
+  const s = createInitialState();
+  s.invoices = [
+    { id: 'old', status: 'Đã thanh toán', paidAt: '2026-10-11T16:59:59.999Z', total: 1 },
+    { id: 'in', status: 'Đã thanh toán', paidAt: '2026-10-11T17:00:00Z', total: 105, roomAmount: 100, discount: 5, vat: 10 },
+    { id: 'end', status: 'Đã thanh toán', paidAt: '2026-10-12T16:59:59.999Z', total: 20, serviceAmount: 20 },
+    { id: 'next', status: 'Đã thanh toán', paidAt: '2026-10-12T17:00:00Z', total: 7 },
+    { id: 'unpaid', status: 'Chờ thanh toán', createdAt: '2026-10-12T10:00+07:00', total: 500, due: 400 }
+  ];
+  s.receipts = [{ at: '2026-10-12T12:00', type: 'Thu thanh toán', amount: 200 }, { at: '2026-10-12T13:00+07:00', type: 'Hoàn thanh toán', amount: 25 }];
+  const r = financeReport(s, '2026-10-12', '2026-10-12');
+  assert.deepEqual(r.invoices.map((i) => i.id), ['in', 'end']);
+  assert.equal(r.revenue, 125); assert.equal(r.cashReceived, 175); assert.equal(r.byDay[0].cash, 175);
+  assert.equal(r.byDay[0].amount, r.revenue); assert.equal(r.outstanding, 400);
+  const range = financeReport(s, '2026-10-12', '2026-10-14'); assert.equal(range.byDay.length, 3); assert.equal(range.byDay[2].amount, 0);
+  assert.equal(range.byDay.reduce((n, d) => n + d.amount, 0), range.revenue);
+  assert.throws(() => financeReport(s, '2026-10-13', '2026-10-12'), /khoảng ngày/);
+  assert.throws(() => financeReport(s, '', ''), /khoảng ngày/);
 });
 
 const failures = tests.filter((item) => !item.ok);

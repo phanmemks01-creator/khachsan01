@@ -6,7 +6,7 @@ const root = path.resolve(import.meta.dirname, '..');
 const required = [
   'index.html', 'styles.css', 'package.json', 'vercel.json', '.env.example',
   'api/_shared.js', 'api/health.js', 'api/state.js',
-  'src/model.js', 'src/domain.js', 'src/store.js', 'src/app.js',
+  'src/excel.js', 'src/model.js', 'src/domain.js', 'src/store.js', 'src/app.js',
   'supabase/migrations/001_hotel_manager.sql', 'README.md'
 ];
 
@@ -21,7 +21,7 @@ for (const file of javascript) {
 
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 for (const asset of ['/styles.css', '/src/app.js']) if (!html.includes(asset)) failures.push(`index.html chưa liên kết ${asset}`);
-const clientText = ['src/model.js', 'src/domain.js', 'src/store.js', 'src/app.js'].map((file) => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
+const clientText = ['src/excel.js', 'src/model.js', 'src/domain.js', 'src/store.js', 'src/app.js'].map((file) => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
 if (clientText.includes('SUPABASE_SERVICE_ROLE_KEY')) failures.push('Khóa service role xuất hiện trong mã trình duyệt.');
 const sql = fs.readFileSync(path.join(root, 'supabase/migrations/001_hotel_manager.sql'), 'utf8');
 for (const marker of ['enable row level security', 'save_hotel_state', 'service_role']) if (!sql.toLowerCase().includes(marker)) failures.push(`SQL thiếu ${marker}`);

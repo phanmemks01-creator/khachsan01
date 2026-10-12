@@ -55,7 +55,7 @@ export function createInitialState() {
       financeLocked: true, financeSessionMinutes: 30, financeMaxAttempts: 5, financeLockMinutes: 15,
       financePinHash: ''
     },
-    rates, rooms, services,
+    rates, rooms, services, employees: [],
     guests: [], bookings: [], stays: [], moves: [], charges: [], invoices: [], invoiceLines: [], receipts: [],
     housekeeping: [], maintenance: [], stockIns: [], stockOuts: [], audit: []
   };
