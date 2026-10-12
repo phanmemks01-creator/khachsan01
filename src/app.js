@@ -3,13 +3,14 @@ import { APP_VERSION, deepClone, id, isoLocal, validateState } from './model.js'
 import {
   addCharge, adjustInvoice, availableRooms, cancelBooking, checkIn, checkOut, completeMaintenance, createBooking,
   createMaintenance, directCheckIn, dashboard, roomPerformance, extendStay, financeReport, invoiceGroupId, normalize, payInvoice, payInvoiceGroup, receiveStock, refundSurplus,
-  roomPriceQuote, roomRate, transferRoom, updateHousekeeping
+  roomPriceQuote, roomRate, roomAvailable, transferRoom, updateHousekeeping
 } from './domain.js';
 
 const store = new HotelStore();
 const reportToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const ui = {
   performance: { from: reportToday.slice(0, 7) + '-01', to: reportToday },
+  mapRoomId: null,
   page: 'dashboard', state: null, busy: false, financeUnlockedUntil: 0,
   booking: { arrival: isoLocal(), departure: isoLocal(new Date(Date.now() + 86400000)), priceMode: 'Theo ngày', query: '', floor: '', roomType: '', selected: new Set() },
   roomFilter: { query: '', floor: '', status: '' },
@@ -53,7 +54,7 @@ function statusClass(status) {
 }
 
 function openModal(html) { $('#modalBody').innerHTML = `<div class="modal-content">${html}</div>`; $('#modal').showModal(); requestAnimationFrame(() => $('#modalBody input, #modalBody select, #modalBody textarea')?.focus()); }
-function closeModal() { $('#modal').close(); }
+function closeModal() { $('#modal').close(); ui.mapRoomId = null; }
 
 async function mutate(action, successMessage) {
   if (ui.busy) return false;
@@ -93,6 +94,7 @@ const titles = {
 };
 
 function navigate(page) {
+  ui.mapRoomId = null;
   ui.page = page; $$('#nav button').forEach((button) => button.classList.toggle('active', button.dataset.page === page));
   $('#sidebar').classList.remove('open'); $('#sidebarBackdrop').classList.remove('open'); render();
 }
@@ -135,15 +137,60 @@ function renderDashboard() {
 
 function renderRooms() {
   const { query, floor, status } = ui.roomFilter;
-  const floors = [...new Set(ui.state.rooms.map((room) => room.floor))].sort();
+  const floors = [...new Set(ui.state.rooms.map((room) => room.floor))].sort((a, b) => String(a).localeCompare(String(b), 'vi', { numeric: true }));
   return `<div class="toolbar"><div class="field"><label>Tìm phòng</label><input id="roomQuery" value="${esc(query)}" placeholder="Gõ mã, tên hoặc loại phòng"></div><div class="field"><label>Tầng</label><select id="roomFloor"><option value="">Tất cả</option>${floors.map((item) => `<option ${String(item) === floor ? 'selected' : ''}>${item}</option>`).join('')}</select></div><div class="field"><label>Trạng thái</label><select id="roomStatus"><option value="">Tất cả</option>${['Phòng trống', 'Đã đặt', 'Đang ở', 'Chờ vệ sinh', 'Bảo trì', 'Tạm khóa'].map((item) => `<option ${item === status ? 'selected' : ''}>${item}</option>`).join('')}</select></div></div>
-  <div id="roomGrid" class="room-grid">${roomCardsHtml()}</div>`;
+  <p class="sub">Bấm vào phòng để xem khách, nhận/trả phòng, dịch vụ, thanh toán hoặc vệ sinh. Các phòng được nhóm theo tầng.</p><div id="roomGrid">${roomCardsHtml()}</div>`;
 }
 
 function roomCardsHtml() {
   const { query, floor, status } = ui.roomFilter;
   const rooms = ui.state.rooms.filter((room) => room.active && (!query || normalize(`${room.id} ${room.name} ${room.roomType}`).includes(normalize(query))) && (!floor || String(room.floor) === floor) && (!status || room.status === status));
-  return rooms.map((room) => `<div class="room-card"><h3>${esc(room.name)}<span class="status ${statusClass(room.status)}">${esc(room.status)}</span></h3><p>${esc(room.id)} · Tầng ${room.floor}</p><p>${esc(room.roomType)} · ${room.capacity} khách</p><div class="price">${money(roomRate(ui.state, room))}/đêm</div></div>`).join('') || '<div class="empty">Không có phòng phù hợp.</div>';
+  if (!rooms.length) return '<div class="empty">Không có phòng phù hợp.</div>';
+  const floors = [...new Set(rooms.map((room) => String(room.floor)))].sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
+  return floors.map((floorName) => {
+    const group = rooms.filter((room) => String(room.floor) === floorName).sort((a, b) => a.name.localeCompare(b.name, 'vi', { numeric: true }));
+    return `<section style="margin-bottom:24px"><div class="section-head" style="padding:12px 16px;border-radius:12px;background:#e0f2fe;border-left:5px solid #0284c7"><h2 style="margin:0">Tầng ${esc(floorName)}</h2><span>${group.length} phòng hiển thị</span></div><div class="room-grid">${group.map((room) => `<button type="button" class="room-card" data-action="open-map-booking" data-id="${esc(room.id)}" aria-label="Đặt ${esc(room.name)}, tầng ${esc(floorName)}, ${esc(room.status)}" style="text-align:left"><h3>${esc(room.name)}<span class="status ${statusClass(room.status)}">${esc(room.status)}</span></h3><p>${esc(room.id)} · ${esc(room.roomType)} · ${room.capacity} khách</p><div class="price">${money(roomRate(ui.state, room))}/đêm</div><p class="sub">Bấm để xem và thao tác</p></button>`).join('')}</div></section>`;
+  }).join('');
+}
+
+function roomOperationsModal(roomId) {
+  const room = ui.state.rooms.find((item) => item.id === roomId && item.active);
+  if (!room) return toast('Không tìm thấy phòng.', true);
+  ui.mapRoomId = roomId;
+  const stay = ui.state.stays.find((item) => item.roomId === roomId && item.status === 'Đang ở');
+  const bookings = ui.state.bookings.filter((item) => item.roomId === roomId && ['Chờ xác nhận', 'Đã xác nhận'].includes(item.status)).sort((a, b) => new Date(a.arrival) - new Date(b.arrival));
+  const tasks = ui.state.housekeeping.filter((item) => item.roomId === roomId && !['Hoàn thành', 'Đã hủy'].includes(item.status));
+  const invoices = ui.state.invoices.filter((item) => item.roomId === roomId && item.status !== 'Đã hủy' && (item.due > 0 || item.surplus > 0));
+  const guestInfo = (item) => `<p><b>${esc(item.guestName)}</b> · SĐT: ${esc(item.phone || 'Chưa nhập')} · ${item.guestCount || 1} khách</p><p>${esc(item.priceMode || 'Theo ngày')} · Tiền cọc: ${money(item.deposit)}</p>${item.note ? `<p>Ghi chú: ${esc(item.note)}</p>` : ''}`;
+  const charges = stay ? ui.state.charges.filter((item) => item.stayId === stay.id) : [];
+  openModal(`<h2>${esc(room.name)} · Tầng ${esc(room.floor)}</h2><p>${esc(room.roomType)} · <b>${esc(room.status)}</b></p>
+    ${stay ? `<div class="card"><h3>Khách đang lưu trú</h3>${guestInfo(stay)}<p>Nhận: ${dateTime(stay.checkIn)}<br>Trả dự kiến: ${dateTime(stay.expectedCheckout)}</p><div class="actions"><button class="button" data-action="map-services" data-id="${esc(stay.id)}">Thêm dịch vụ</button><button class="button primary" data-action="open-checkout" data-id="${esc(stay.id)}">Trả phòng / giảm giá / thanh toán</button></div>${charges.length ? `<h3>Dịch vụ đã dùng</h3>${charges.map((item) => `<p>${esc(item.name)} × ${item.quantity} · ${money(item.amount)}</p>`).join('')}` : ''}</div>` : ''}
+    ${bookings.length ? `<h3>Khách đã đặt phòng (${bookings.length})</h3>${bookings.map((item) => `<div class="card" style="margin:10px 0">${guestInfo(item)}<p>${esc(item.id)} · ${esc(item.status)}<br>${dateTime(item.arrival)} → ${dateTime(item.departure)}</p><button class="button success" data-action="map-checkin" data-id="${esc(item.id)}">Nhận phòng</button></div>`).join('')}` : ''}
+    ${tasks.length ? `<h3>Vệ sinh phòng</h3>${tasks.map((item) => `<div class="card"><p>${esc(item.type)} · <b>${esc(item.status)}</b></p><p>Người thực hiện: ${esc(item.assignee || 'Chưa phân công')}</p><div class="actions">${item.status === 'Chờ xử lý' ? `<button class="button" data-action="map-clean-start" data-id="${esc(item.id)}">Bắt đầu vệ sinh</button>` : ''}<button class="button success" data-action="map-clean-done" data-id="${esc(item.id)}">Hoàn thành vệ sinh</button></div></div>`).join('')}` : ''}
+    ${invoices.length ? `<h3>Hóa đơn cần xử lý</h3>${invoices.map((item) => `<div class="card"><p>${esc(item.id)} · ${esc(item.guestName)}<br>Còn thu: ${money(item.due)} · Thừa: ${money(item.surplus)}</p><div class="actions">${item.due > 0 ? `<button class="button primary" data-action="map-pay" data-id="${esc(item.id)}">Thanh toán${Number(item.paid || 0) === 0 ? ' / giảm giá' : ' phần còn lại'}</button>` : ''}${item.surplus > 0 ? `<button class="button" data-action="refund" data-id="${esc(item.id)}">Hoàn tiền thừa</button>` : ''}<button class="button" data-action="print-invoice" data-id="${esc(item.id)}">Xem hóa đơn</button></div></div>`).join('')}` : ''}
+    <div class="actions"><button class="button" data-action="close-modal">Đóng</button>${!['Bảo trì', 'Tạm khóa'].includes(room.status) ? `<button class="button primary" data-action="map-new-booking" data-id="${esc(roomId)}">Đặt phòng mới</button>` : ''}</div>`);
+}
+
+function mapServicesModal(stayId) {
+  const stay = ui.state.stays.find((item) => item.id === stayId && item.status === 'Đang ở');
+  if (!stay) return toast('Khách không còn lưu trú.', true);
+  openModal(`<h2>Thêm dịch vụ · ${esc(stay.roomId)}</h2><p>${esc(stay.guestName)}</p><form id="chargeForm"><input type="hidden" name="stayId" value="${esc(stayId)}"><div id="chargeRows">${chargeRowHtml(ui.state.services.filter((item) => item.active))}</div><div class="actions"><button type="button" class="button" data-action="add-charge-row">+ Thêm dịch vụ</button></div><div class="field"><label>Ghi chú</label><input name="note"></div><div class="actions"><button type="button" class="button" data-action="map-back">Quay lại phòng</button><button class="button success">Lưu dịch vụ</button></div></form>`);
+}
+
+function mapPaymentModal(invoiceId) {
+  const invoice = ui.state.invoices.find((item) => item.id === invoiceId);
+  if (!invoice) return toast('Không tìm thấy hóa đơn.', true);
+  if (!Number(invoice.paid || 0)) return paymentModal(invoiceId);
+  openModal(`<h2>Thu tiền còn lại · ${esc(invoice.roomId)}</h2><p>${esc(invoice.guestName)} · ${esc(invoice.id)}</p><p>Còn phải thu: <b>${money(invoice.due)}</b></p><p class="sub">Hóa đơn đã thu một phần nên giá và giảm tiền đã được khóa.</p><form id="mapCollectForm"><input type="hidden" name="invoiceId" value="${esc(invoice.id)}"><div class="field"><label>Số tiền thu</label><input name="amount" data-money inputmode="numeric" value="${money(invoice.due)}" required></div><div class="field"><label>Phương thức</label><select name="method"><option>Tiền mặt</option><option>Chuyển khoản</option><option>Thẻ</option></select></div><div class="field"><label>Ghi chú</label><input name="note"></div><div class="actions"><button class="button success">Ghi nhận thanh toán</button></div></form>`);
+}
+
+function mapBookingModal(roomId) {
+  const room = ui.state.rooms.find((item) => item.id === roomId && item.active);
+  if (!room) return toast('Không tìm thấy phòng đang hoạt động.', true);
+  const arrival = isoLocal();
+  const departure = isoLocal(new Date(Date.now() + 86400000));
+  const rate = ui.state.rates.find((item) => item.active && item.roomType === room.roomType);
+  openModal(`<h2>Đặt / nhận ${esc(room.name)}</h2><p><b>Tầng ${esc(room.floor)} · ${esc(room.roomType)}</b> · ${esc(room.status)}</p><p class="sub">Giá ngày thường: ${money(rate?.weekday)} · Qua đêm: ${money(rate?.overnight ?? rate?.weekday)} · Giờ đầu: ${money(rate?.hourlyFirst)}</p><form id="mapBookingForm"><input type="hidden" name="roomId" value="${esc(room.id)}"><div class="form-grid"><div class="field span-2"><label>Tên khách *</label><input name="guestName" required></div><div class="field"><label>Số điện thoại</label><input name="phone" type="tel"></div><div class="field"><label>Số khách</label><input name="guestCount" type="number" min="1" max="${room.capacity}" value="1" required></div><div class="field span-2"><label>Loại tính giá *</label><select name="priceMode"><option>Theo ngày</option><option>Qua đêm</option><option>Theo giờ</option></select></div><div class="field"><label>Nhận dự kiến *</label><input name="arrival" type="datetime-local" value="${esc(arrival)}" required></div><div class="field"><label>Trả dự kiến *</label><input name="departure" type="datetime-local" value="${esc(departure)}" required></div><div class="field"><label>Tiền cọc</label><input name="deposit" type="text" inputmode="numeric" data-money value="0"></div><div class="field"><label>Kênh đặt</label><select name="channel"><option>Trực tiếp</option><option>Điện thoại</option><option>Website</option><option>Đại lý</option></select></div><div class="field span-4"><label>Ghi chú</label><input name="note"></div></div><p class="sub">Lưu đặt phòng dùng giờ nhận dự kiến. Nhận phòng trực tiếp dùng thời điểm bấm nút. Hệ thống kiểm tra lịch trống trước khi lưu.</p><div class="actions"><button type="button" class="button" data-action="close-modal">Hủy</button><button type="submit" class="button primary">Lưu đặt phòng</button><button type="submit" class="button success" value="direct-checkin">Nhận phòng trực tiếp</button></div></form>`);
 }
 
 function bookingRoomCards() {
@@ -395,14 +442,14 @@ function checkoutModal(stayId) {
   const booking = ui.state.bookings.find((item) => item.id === stay?.bookingId);
   const earliestCheckout = new Date(new Date(stay.checkIn).getTime() + 60000);
   const suggestedCheckout = new Date(Math.max(Date.now(), earliestCheckout.getTime()));
-  openModal(`<h2>Trả phòng ${esc(stay?.roomId)}</h2><p class="sub">${esc(stay?.guestName)} · Nhóm ${esc(booking?.groupId || 'đặt lẻ')} · <b>${esc(stay?.priceMode || 'Theo ngày')}</b> · Cọc ${money(stay?.deposit)}</p><form id="checkoutForm"><input type="hidden" name="stayId" value="${esc(stayId)}"><div class="form-grid"><div class="field span-2"><label>Thời gian trả</label><input name="checkout" type="datetime-local" min="${esc(isoLocal(earliestCheckout))}" value="${esc(isoLocal(suggestedCheckout))}" required></div><div class="field span-2"><label>Ghi chú trả phòng</label><input name="note"></div></div><p class="sub">Trả phòng chỉ chốt thời gian và lập hóa đơn. Tiền phòng, phụ thu và giảm tiền được kiểm tra/chỉnh tại mục Thanh toán.</p><div class="actions no-print"><button class="button primary">Trả phòng & chuyển sang thanh toán</button></div></form>`);
+  openModal(`<h2>Trả phòng ${esc(stay?.roomId)}</h2><p class="sub">${esc(stay?.guestName)} · Nhóm ${esc(booking?.groupId || 'đặt lẻ')} · <b>${esc(stay?.priceMode || 'Theo ngày')}</b> · Cọc ${money(stay?.deposit)}</p><form id="checkoutForm"><input type="hidden" name="stayId" value="${esc(stayId)}"><div class="form-grid"><div class="field span-2"><label>Thời gian trả</label><input name="checkout" type="datetime-local" min="${esc(isoLocal(earliestCheckout))}" value="${esc(isoLocal(suggestedCheckout))}" required></div><div class="field span-2"><label>Ghi chú trả phòng</label><input name="note"></div></div><p class="sub">Trả phòng chốt thời gian và lập hóa đơn. Bước tiếp theo cho phép kiểm tra tiền phòng, phụ thu, giảm giá và thanh toán.</p><div class="actions no-print"><button class="button primary">Trả phòng & chuyển sang thanh toán</button></div></form>`);
 }
 function paymentModal(invoiceId) {
   const invoice = ui.state.invoices.find((item) => item.id === invoiceId);
   const lines = ui.state.invoiceLines.filter((item) => item.invoiceId === invoiceId && item.type !== 'Tiền phòng');
   const serviceRows = lines.length ? lines.map((line) => `<tr><td>${esc(line.name)}</td><td>${line.quantity} ${esc(line.unit)}</td><td>${money(line.unitPrice)}</td><td>${money(line.amount)}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">Không có dịch vụ/minibar.</td></tr>';
   const canCollect = Number(invoice.due || 0) > 0;
-  openModal(`<h2>Thanh toán phòng ${esc(invoice.roomId)}</h2><p class="sub">${esc(invoice.guestName)} · Hóa đơn ${esc(invoice.id)} · <b>${esc(invoice.priceMode || 'Theo ngày')}</b> · ${invoice.nights || 0} ${esc(invoice.pricingUnit || 'đêm')}</p><form id="paymentForm"><input type="hidden" name="invoiceId" value="${esc(invoiceId)}"><div class="table-wrap"><table class="table"><thead><tr><th>Dịch vụ / minibar</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead><tbody>${serviceRows}</tbody></table></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Tiền phòng (có thể sửa)</label><input name="roomAmount" type="text" inputmode="numeric" data-money min="0" value="${money(invoice.roomAmount)}" required></div><div class="field"><label>Lý do điều chỉnh giá phòng</label><input name="roomAdjustmentReason" value="${esc(invoice.roomAdjustmentReason || '')}" placeholder="Bắt buộc nếu sửa tiền phòng"></div><div class="field"><label>Phụ thu</label><input name="surcharge" type="text" inputmode="numeric" data-money min="0" value="${money(invoice.surcharge)}"></div><div class="field"><label>Giảm tiền (VNĐ)</label><input name="discount" type="text" inputmode="numeric" data-money min="0" value="${money(invoice.discount)}"></div><div class="field span-2"><label>Lý do giảm tiền</label><input name="discountReason" value="${esc(invoice.discountReason || '')}" placeholder="Bắt buộc khi có giảm tiền"></div><div class="field"><label>Số tiền thu (nếu có)</label><input name="amount" type="text" inputmode="numeric" data-money min="${canCollect ? 1 : 0}" value="${money(invoice.due)}" ${canCollect ? 'required' : ''}></div><div class="field"><label>Phương thức</label><select name="method"><option>Tiền mặt</option><option>Chuyển khoản</option><option>Thẻ</option></select></div><div class="field span-2"><label>Ghi chú</label><input name="note"></div></div><div class="summary" style="margin-top:15px"><div><span>Dịch vụ</span><b>${money(invoice.serviceAmount)}</b></div><div><span>Cọc + đã thu</span><b>${money(invoice.deposit + invoice.paid)}</b></div><div><span>Còn phải thu hiện tại</span><b>${money(invoice.due)}</b></div></div><div class="actions"><button class="button success">Cập nhật & ghi nhận thanh toán</button></div></form>`);
+  openModal(`<h2>Thanh toán phòng ${esc(invoice.roomId)}</h2><p class="sub">${esc(invoice.guestName)} · Hóa đơn ${esc(invoice.id)} · <b>${esc(invoice.priceMode || 'Theo ngày')}</b> · ${invoice.nights || 0} ${esc(invoice.pricingUnit || 'đêm')}</p><form id="paymentForm"><input type="hidden" name="invoiceId" value="${esc(invoiceId)}"><div class="table-wrap"><table class="table"><thead><tr><th>Dịch vụ / minibar</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead><tbody>${serviceRows}</tbody></table></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Tiền phòng (có thể sửa)</label><input name="roomAmount" type="text" inputmode="numeric" data-money min="0" value="${money(invoice.roomAmount)}" required></div><div class="field"><label>Lý do điều chỉnh giá phòng</label><input name="roomAdjustmentReason" value="${esc(invoice.roomAdjustmentReason || '')}" placeholder="Bắt buộc nếu sửa tiền phòng"></div><div class="field"><label>Phụ thu</label><input name="surcharge" type="text" inputmode="numeric" data-money min="0" value="${money(invoice.surcharge)}"></div><div class="field"><label>Giảm tiền (VNĐ)</label><input name="discount" type="text" inputmode="numeric" data-money min="0" value="${money(invoice.discount)}"></div><div class="field span-2"><label>Lý do giảm tiền</label><input name="discountReason" value="${esc(invoice.discountReason || '')}" placeholder="Bắt buộc khi có giảm tiền"></div><div class="field"><label>Số tiền thu (nếu có)</label><input name="amount" type="text" inputmode="numeric" data-money min="${canCollect ? 1 : 0}" value="${money(invoice.due)}" ${canCollect ? 'required' : ''}></div><div class="field"><label>Phương thức</label><select name="method"><option>Tiền mặt</option><option>Chuyển khoản</option><option>Thẻ</option></select></div><div class="field span-2"><label>Ghi chú</label><input name="note"></div></div><div class="summary" style="margin-top:15px"><div><span>Dịch vụ</span><b>${money(invoice.serviceAmount)}</b></div><div><span>Cọc + đã thu</span><b>${money(invoice.deposit + invoice.paid)}</b></div><div><span>Còn phải thu sau điều chỉnh</span><b id="paymentDuePreview">${money(invoice.due)}</b></div></div><div class="actions"><button class="button success">Cập nhật & ghi nhận thanh toán</button></div></form>`);
 }
 function groupPaymentModal(groupId) {
   const invoices = ui.state.invoices.filter((item) => invoiceGroupId(ui.state, item) === groupId && Number(item.due || 0) > 0);
@@ -446,6 +493,25 @@ document.addEventListener('click', async (event) => {
   const actionNode = event.target.closest('[data-action]'); if (!actionNode) return;
   const action = actionNode.dataset.action; const itemId = actionNode.dataset.id;
   if (action === 'close-modal') { closeModal(); return; }
+  if (action === 'open-map-booking') { roomOperationsModal(itemId); return; }
+  if (action === 'map-new-booking') { mapBookingModal(itemId); return; }
+  if (action === 'map-back') { if (ui.mapRoomId) roomOperationsModal(ui.mapRoomId); return; }
+  if (action === 'map-services') { mapServicesModal(itemId); return; }
+  if (action === 'map-pay') { mapPaymentModal(itemId); return; }
+  if (action === 'map-checkin') {
+    const saved = await mutate((state) => {
+      const booking = state.bookings.find((item) => item.id === itemId);
+      const now = new Date().toISOString();
+      if (!booking || new Date(booking.departure) <= new Date(now)) throw new Error('Đã quá giờ trả dự kiến của phiếu đặt. Vui lòng kiểm tra lại lịch đặt.');
+      if (!roomAvailable(state, booking.roomId, now, booking.departure, booking.id)) throw new Error('Phòng không còn trống trong khoảng nhận–trả này.');
+      return checkIn(state, itemId, now);
+    }, 'Đã nhận phòng.');
+    if (saved) roomOperationsModal(ui.mapRoomId); return;
+  }
+  if (action === 'map-clean-start' || action === 'map-clean-done') {
+    const saved = await mutate((state) => updateHousekeeping(state, itemId, action === 'map-clean-start' ? 'Đang làm' : 'Hoàn thành'), 'Đã cập nhật vệ sinh phòng.');
+    if (saved) roomOperationsModal(ui.mapRoomId); return;
+  }
   if (action === 'toggle-room') { ui.booking.selected.has(itemId) ? ui.booking.selected.delete(itemId) : ui.booking.selected.add(itemId); $('#bookingRoomGrid').innerHTML = bookingRoomCards(); renderBookingSelected(); }
   if (action === 'remove-room') { ui.booking.selected.delete(itemId); $('#bookingRoomGrid').innerHTML = bookingRoomCards(); renderBookingSelected(); }
   if (action === 'add-charge-row') {
@@ -468,7 +534,7 @@ document.addEventListener('click', async (event) => {
   if (action === 'open-transfer') transferRoomModal(itemId);
   if (action === 'open-payment') paymentModal(itemId);
   if (action === 'open-group-payment') groupPaymentModal(itemId);
-  if (action === 'refund') await mutate((state) => refundSurplus(state, itemId), 'Đã hoàn tiền thừa.');
+  if (action === 'refund') { const saved = await mutate((state) => refundSurplus(state, itemId), 'Đã hoàn tiền thừa.'); if (saved && ui.mapRoomId) roomOperationsModal(ui.mapRoomId); }
   if (action === 'print-invoice') invoiceModal(itemId);
   if (action === 'housekeeping-start') await mutate((state) => updateHousekeeping(state, itemId, 'Đang làm'), 'Đã bắt đầu vệ sinh.');
   if (action === 'housekeeping-done') await mutate((state) => updateHousekeeping(state, itemId, 'Hoàn thành'), 'Đã hoàn thành vệ sinh và cập nhật phòng.');
@@ -517,10 +583,29 @@ document.addEventListener('change', (event) => {
   }
 });
 
+document.addEventListener('input', (event) => {
+  const form = event.target.closest('#paymentForm');
+  if (!form || !['roomAmount', 'roomAdjustmentReason', 'surcharge', 'discount', 'discountReason'].includes(event.target.name)) return;
+  try {
+    const data = formData(form);
+    const preview = adjustInvoice(ui.state, data.invoiceId, data).invoices.find((item) => item.id === data.invoiceId);
+    $('[name="amount"]', form).value = money(preview.due);
+    $('[name="amount"]', form).required = preview.due > 0;
+    const label = $('#paymentDuePreview', form); if (label) label.textContent = money(preview.due);
+  } catch { /* Validation errors are shown on submit; retain the last valid quote. */ }
+});
+
 document.addEventListener('submit', async (event) => {
   event.preventDefault(); const form = event.target;
   // Named controls (e.g. name="id") can shadow native form properties.
   const formId = form.getAttribute('id'); const data = formData(form);
+  if (formId === 'mapBookingForm') {
+    data.roomIds = [data.roomId];
+    const direct = event.submitter?.value === 'direct-checkin';
+    if (!Number.isFinite(Date.parse(data.arrival)) || !Number.isFinite(Date.parse(data.departure))) return toast('Vui lòng nhập đủ giờ nhận và giờ trả hợp lệ.', true);
+    const saved = await mutate((state) => direct ? directCheckIn(state, data) : createBooking(state, data), direct ? 'Đã nhận phòng trực tiếp từ sơ đồ phòng.' : 'Đã lưu đặt phòng từ sơ đồ phòng.');
+    if (saved) closeModal();
+  }
   if (formId === 'bookingForm') {
     data.roomIds = [...ui.booking.selected]; data.arrival = ui.booking.arrival; data.departure = ui.booking.departure; data.priceMode = ui.booking.priceMode;
     const direct = event.submitter?.value === 'direct-checkin';
@@ -532,10 +617,10 @@ document.addEventListener('submit', async (event) => {
     const items = $$('[data-charge-row]', form).map((row) => ({ serviceId: $('select[name="serviceId"]', row)?.value || '', quantity: $('input[name="quantity"]', row)?.value || '1' })).filter((item) => item.serviceId);
     if (!items.length) return toast('Vui lòng chọn ít nhất một dịch vụ.', true);
     const saved = await mutate((state) => items.reduce((next, item) => addCharge(next, { stayId: data.stayId, ...item, note: data.note || '' }), state), 'Đã ghi toàn bộ dịch vụ phát sinh.');
-    if (saved) form.reset();
+    if (saved) { if (ui.mapRoomId) roomOperationsModal(ui.mapRoomId); else form.reset(); }
   }
   if (formId === 'stockForm') { await mutate((state) => receiveStock(state, data), 'Đã nhập kho.'); form.reset(); }
-  if (formId === 'checkoutForm') { const saved = await mutate((state) => checkOut(state, data.stayId, data), 'Đã trả phòng và lập hóa đơn.'); if (saved) { closeModal(); navigate('payments'); } }
+  if (formId === 'checkoutForm') { const saved = await mutate((state) => checkOut(state, data.stayId, data), 'Đã trả phòng và lập hóa đơn.'); if (saved) { if (ui.mapRoomId) { const invoice = ui.state.invoices.find((item) => item.stayId === data.stayId); mapPaymentModal(invoice.id); } else { closeModal(); navigate('payments'); } } }
   if (formId === 'extendStayForm') { await mutate((state) => extendStay(state, data.stayId, data.newCheckout), 'Đã gia hạn lưu trú và giữ giá đã chốt.'); closeModal(); }
   if (formId === 'transferRoomForm') { await mutate((state) => transferRoom(state, data.stayId, data.newRoomId, data.movedAt, data.reason), 'Đã chuyển phòng và tạo công việc vệ sinh phòng cũ.'); closeModal(); }
   if (formId === 'paymentForm') {
@@ -543,7 +628,11 @@ document.addEventListener('submit', async (event) => {
       const next = adjustInvoice(state, data.invoiceId, data);
       return Number(data.amount || 0) > 0 ? payInvoice(next, data.invoiceId, data) : next;
     }, 'Đã cập nhật hóa đơn và ghi nhận thanh toán riêng.');
-    if (saved) closeModal();
+    if (saved) { if (ui.mapRoomId) roomOperationsModal(ui.mapRoomId); else closeModal(); }
+  }
+  if (formId === 'mapCollectForm') {
+    const saved = await mutate((state) => payInvoice(state, data.invoiceId, data), 'Đã ghi nhận thanh toán.');
+    if (saved) roomOperationsModal(ui.mapRoomId);
   }
   if (formId === 'groupPaymentForm') {
     const fd = new FormData(form); const invoiceIds = fd.getAll('invoiceIds');
@@ -622,6 +711,7 @@ document.addEventListener('submit', async (event) => {
 
 $('#nav').addEventListener('click', () => {});
 $('#modalClose').addEventListener('click', closeModal);
+$('#modal').addEventListener('cancel', () => { ui.mapRoomId = null; });
 function setDesktopMenuCollapsed(collapsed) {
   $('#app').classList.toggle('menu-collapsed', collapsed);
   const button = $('#sidebarToggle');
