@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createInitialState, validateState } from '../src/model.js';
 import {
-  saveEmployee, addCharge, adjustInvoice, availableRooms, checkIn, checkOut, completeMaintenance, createBooking, createMaintenance,
+  changeBookingRoom, roomMatchesSearch, cancelBooking, saveEmployee, addCharge, adjustInvoice, availableRooms, checkIn, checkOut, completeMaintenance, createBooking, createMaintenance,
   dashboard, directCheckIn, extendStay, financeReport, invoiceGroupId, nights, payInvoice, payInvoiceGroup, receiveStock, refundSurplus, roomAvailable,
   transferRoom, updateHousekeeping
 } from '../src/domain.js';
@@ -231,6 +231,20 @@ await test('Báo cáo ngày Việt Nam: biên nửa đêm, hoàn tiền, ngày t
   assert.equal(range.byDay.reduce((n, d) => n + d.amount, 0), range.revenue);
   assert.throws(() => financeReport(s, '2026-10-13', '2026-10-12'), /khoảng ngày/);
   assert.throws(() => financeReport(s, '', ''), /khoảng ngày/);
+});
+
+await test('Tìm khách không dấu/SĐT, bỏ phiếu đã hủy; đổi phòng giữ cọc và chặn trùng', () => {
+  let state = createBooking(createInitialState(), { roomIds: ['P01'], guestName: 'Nguyễn Thị Ánh', phone: '0912 345 678', guestCount: 1, deposit: 100000, arrival: '2026-11-01T14:00', departure: '2026-11-02T12:00' });
+  const booking = state.bookings[0], room = state.rooms.find((r) => r.id === 'P01');
+  assert.equal(roomMatchesSearch(state, room, 'nguyen thi anh'), true);
+  assert.equal(roomMatchesSearch(state, room, '0912345'), true);
+  assert.equal(roomMatchesSearch(cancelBooking(state, booking.id), room, 'nguyen thi anh'), false);
+  const next = changeBookingRoom(state, booking.id, 'P02');
+  assert.equal(next.bookings[0].deposit, 100000); assert.equal(next.bookings[0].roomId, 'P02');
+  assert.equal(state.bookings[0].roomId, 'P01'); assert.equal(validateState(next), true);
+  state = createBooking(state, { roomIds: ['P02'], guestName: 'Khách khác', arrival: booking.arrival, departure: booking.departure });
+  assert.throws(() => changeBookingRoom(state, booking.id, 'P02'), /không còn trống/);
+  assert.throws(() => changeBookingRoom(cancelBooking(state, booking.id), booking.id, 'P03'), /không thể đổi/);
 });
 
 const failures = tests.filter((item) => !item.ok);

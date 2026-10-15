@@ -2,7 +2,7 @@ import { excelWorkbook } from './excel.js';
 import { HotelStore } from './store.js';
 import { APP_VERSION, deepClone, id, isoLocal, validateState } from './model.js';
 import {
-  saveEmployee, addCharge, adjustInvoice, availableRooms, cancelBooking, checkIn, checkOut, completeMaintenance, createBooking,
+  changeBookingRoom, roomMatchesSearch, saveEmployee, addCharge, adjustInvoice, availableRooms, cancelBooking, checkIn, checkOut, completeMaintenance, createBooking,
   createMaintenance, directCheckIn, dashboard, roomPerformance, extendStay, financeReport, invoiceGroupId, normalize, payInvoice, payInvoiceGroup, receiveStock, refundSurplus,
   roomPriceQuote, roomRate, roomAvailable, transferRoom, updateHousekeeping
 } from './domain.js';
@@ -41,6 +41,29 @@ function toast(message, error = false) {
   const node = $('#toast'); node.textContent = message; node.className = `toast${error ? ' error' : ''}`;
   clearTimeout(toast.timer); toast.timer = setTimeout(() => node.classList.add('hidden'), 4200);
 }
+
+function employeeWarning(field) {
+  let dialog = document.getElementById('employeeWarning');
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.id = 'employeeWarning'; dialog.className = 'modal';
+    dialog.style.cssText = 'max-width:440px;padding:24px';
+    dialog.setAttribute('role', 'alertdialog');
+    dialog.setAttribute('aria-labelledby', 'employeeWarningTitle');
+    dialog.setAttribute('aria-describedby', 'employeeWarningMessage');
+    dialog.innerHTML = '<h2 id="employeeWarningTitle">💬 Chưa có tên nhân viên</h2><p id="employeeWarningMessage">Vui lòng nhập hoặc chọn tên nhân viên trước khi tiếp tục. Nếu danh sách trống, thêm nhân viên tại Cài đặt → Nhân viên.</p><div class="actions"><button type="button" class="button primary">Đóng</button></div>';
+    dialog.querySelector('button').onclick = () => dialog.close();
+    dialog.addEventListener('close', () => dialog.returnFocus?.focus());
+    document.body.append(dialog);
+  }
+  dialog.returnFocus = field;
+  if (!dialog.open) dialog.showModal();
+}
+document.addEventListener('invalid', (event) => {
+  if (['employeeId', 'employeeName'].includes(event.target.name)) {
+    event.preventDefault(); employeeWarning(event.target);
+  }
+}, true);
 
 function setBusy(active) {
   ui.busy = active; $('#busy').classList.toggle('hidden', !active);
@@ -139,13 +162,13 @@ function renderDashboard() {
 function renderRooms() {
   const { query, floor, status } = ui.roomFilter;
   const floors = [...new Set(ui.state.rooms.map((room) => room.floor))].sort((a, b) => String(a).localeCompare(String(b), 'vi', { numeric: true }));
-  return `<div class="toolbar"><div class="field"><label>Tìm phòng</label><input id="roomQuery" value="${esc(query)}" placeholder="Gõ mã, tên hoặc loại phòng"></div><div class="field"><label>Tầng</label><select id="roomFloor"><option value="">Tất cả</option>${floors.map((item) => `<option ${String(item) === floor ? 'selected' : ''}>${item}</option>`).join('')}</select></div><div class="field"><label>Trạng thái</label><select id="roomStatus"><option value="">Tất cả</option>${['Phòng trống', 'Đã đặt', 'Đang ở', 'Chờ vệ sinh', 'Bảo trì', 'Tạm khóa'].map((item) => `<option ${item === status ? 'selected' : ''}>${item}</option>`).join('')}</select></div></div>
+  return `<div class="toolbar"><div class="field"><label>Tìm phòng / khách đặt</label><input id="roomQuery" value="${esc(query)}" placeholder="Tên khách, số điện thoại, mã/tên phòng"></div><div class="field"><label>Tầng</label><select id="roomFloor"><option value="">Tất cả</option>${floors.map((item) => `<option ${String(item) === floor ? 'selected' : ''}>${item}</option>`).join('')}</select></div><div class="field"><label>Trạng thái</label><select id="roomStatus"><option value="">Tất cả</option>${['Phòng trống', 'Đã đặt', 'Đang ở', 'Chờ vệ sinh', 'Bảo trì', 'Tạm khóa'].map((item) => `<option ${item === status ? 'selected' : ''}>${item}</option>`).join('')}</select></div></div>
   <p class="sub">Bấm vào phòng để xem khách, nhận/trả phòng, dịch vụ, thanh toán hoặc vệ sinh. Các phòng được nhóm theo tầng.</p><div id="roomGrid">${roomCardsHtml()}</div>`;
 }
 
 function roomCardsHtml() {
   const { query, floor, status } = ui.roomFilter;
-  const rooms = ui.state.rooms.filter((room) => room.active && (!query || normalize(`${room.id} ${room.name} ${room.roomType}`).includes(normalize(query))) && (!floor || String(room.floor) === floor) && (!status || room.status === status));
+  const rooms = ui.state.rooms.filter((room) => room.active && roomMatchesSearch(ui.state, room, query) && (!floor || String(room.floor) === floor) && (!status || room.status === status));
   if (!rooms.length) return '<div class="empty">Không có phòng phù hợp.</div>';
   const floors = [...new Set(rooms.map((room) => String(room.floor)))].sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
   return floors.map((floorName) => {
@@ -165,8 +188,8 @@ function roomOperationsModal(roomId) {
   const guestInfo = (item) => `<p><b>${esc(item.guestName)}</b> · SĐT: ${esc(item.phone || 'Chưa nhập')} · ${item.guestCount || 1} khách</p><p>${esc(item.priceMode || 'Theo ngày')} · Tiền cọc: ${money(item.deposit)}</p>${item.note ? `<p>Ghi chú: ${esc(item.note)}</p>` : ''}`;
   const charges = stay ? ui.state.charges.filter((item) => item.stayId === stay.id) : [];
   openModal(`<h2>${esc(room.name)} · Tầng ${esc(room.floor)}</h2><p>${esc(room.roomType)} · <b>${esc(room.status)}</b></p>
-    ${stay ? `<div class="card"><h3>Khách đang lưu trú</h3>${guestInfo(stay)}<p>Nhân viên nhận phòng: <b>${esc(stay.checkInEmployeeName || 'Chưa ghi nhận')}</b></p><p>Nhận: ${dateTime(stay.checkIn)}<br>Trả dự kiến: ${dateTime(stay.expectedCheckout)}</p><div class="actions"><button class="button" data-action="map-services" data-id="${esc(stay.id)}">Thêm dịch vụ</button><button class="button primary" data-action="open-checkout" data-id="${esc(stay.id)}">Trả phòng / giảm giá / thanh toán</button></div>${charges.length ? `<h3>Dịch vụ đã dùng</h3>${charges.map((item) => `<p>${esc(item.name)} × ${item.quantity} · ${money(item.amount)}</p>`).join('')}` : ''}</div>` : ''}
-    ${bookings.length ? `<h3>Khách đã đặt phòng (${bookings.length})</h3>${bookings.map((item) => `<div class="card" style="margin:10px 0">${guestInfo(item)}<p>${esc(item.id)} · ${esc(item.status)}<br>${dateTime(item.arrival)} → ${dateTime(item.departure)}</p><button class="button success" data-action="map-checkin" data-id="${esc(item.id)}">Nhận phòng</button></div>`).join('')}` : ''}
+    ${stay ? `<div class="card"><h3>Khách đang lưu trú</h3>${guestInfo(stay)}<p>Nhân viên nhận phòng: <b>${esc(stay.checkInEmployeeName || 'Chưa ghi nhận')}</b></p><p>Nhận: ${dateTime(stay.checkIn)}<br>Trả dự kiến: ${dateTime(stay.expectedCheckout)}</p><div class="actions"><button class="button" data-action="open-transfer" data-id="${esc(stay.id)}">Đổi phòng</button><button class="button" data-action="map-services" data-id="${esc(stay.id)}">Thêm dịch vụ</button><button class="button primary" data-action="open-checkout" data-id="${esc(stay.id)}">Trả phòng / giảm giá / thanh toán</button></div>${charges.length ? `<h3>Dịch vụ đã dùng</h3>${charges.map((item) => `<p>${esc(item.name)} × ${item.quantity} · ${money(item.amount)}</p>`).join('')}` : ''}</div>` : ''}
+    ${bookings.length ? `<h3>Khách đã đặt phòng (${bookings.length})</h3>${bookings.map((item) => `<div class="card" style="margin:10px 0">${guestInfo(item)}<p>${esc(item.id)} · ${esc(item.status)}<br>${dateTime(item.arrival)} → ${dateTime(item.departure)}</p><button class="button success" data-action="map-checkin" data-id="${esc(item.id)}">Nhận phòng</button> <button class="button" data-action="change-booking-room" data-id="${esc(item.id)}">Đổi phòng</button> <button class="button danger" data-action="cancel-booking" data-id="${esc(item.id)}">Hủy đặt phòng</button></div>`).join('')}` : ''}
     ${tasks.length ? `<h3>Vệ sinh phòng</h3>${tasks.map((item) => `<div class="card"><p>${esc(item.type)} · <b>${esc(item.status)}</b></p><p>Người thực hiện: ${esc(item.assignee || 'Chưa phân công')}</p><div class="actions">${item.status === 'Chờ xử lý' ? `<button class="button" data-action="map-clean-start" data-id="${esc(item.id)}">Bắt đầu vệ sinh</button>` : ''}<button class="button success" data-action="map-clean-done" data-id="${esc(item.id)}">Hoàn thành vệ sinh</button></div></div>`).join('')}` : ''}
     ${invoices.length ? `<h3>Hóa đơn cần xử lý</h3>${invoices.map((item) => `<div class="card"><p>${esc(item.id)} · ${esc(item.guestName)}<br>Còn thu: ${money(item.due)} · Thừa: ${money(item.surplus)}</p><div class="actions">${item.due > 0 ? `<button class="button primary" data-action="map-pay" data-id="${esc(item.id)}">Thanh toán${Number(item.paid || 0) === 0 ? ' / giảm giá' : ' phần còn lại'}</button>` : ''}${item.surplus > 0 ? `<button class="button" data-action="refund" data-id="${esc(item.id)}">Hoàn tiền thừa</button>` : ''}<button class="button" data-action="print-invoice" data-id="${esc(item.id)}">Xem hóa đơn</button></div></div>`).join('')}` : ''}
     <div class="actions"><button class="button" data-action="close-modal">Đóng</button>${!['Bảo trì', 'Tạm khóa'].includes(room.status) ? `<button class="button primary" data-action="map-new-booking" data-id="${esc(roomId)}">Đặt phòng mới</button>` : ''}</div>`);
@@ -414,7 +437,13 @@ function employeeModal(employeeId = '') {
 function checkInModal(bookingId) {
   const booking = ui.state.bookings.find((item) => item.id === bookingId);
   if (!booking) return toast('Không tìm thấy phiếu đặt.', true);
-  openModal(`<h2>Nhận phòng ${esc(booking.roomId)}</h2><p>${esc(booking.guestName)} · ${esc(booking.phone)}<br>Trả dự kiến: ${dateTime(booking.departure)}</p><form id="receiveEmployeeForm"><input type="hidden" name="bookingId" value="${esc(bookingId)}">${employeeField('Nhân viên nhận phòng')}<div class="actions"><button class="button success">Xác nhận nhận phòng</button></div></form>`);
+  openModal(`<h2>Nhận phòng ${esc(booking.roomId)}</h2><p>${esc(booking.guestName)} · ${esc(booking.phone)}<br>Trả dự kiến: ${dateTime(booking.departure)}</p><form id="receiveEmployeeForm"><input type="hidden" name="bookingId" value="${esc(bookingId)}">${employeeField('Nhân viên nhận phòng')}<div class="actions"><button type="button" class="button" data-action="close-modal">Đóng</button><button type="button" class="button danger" data-action="cancel-booking" data-id="${esc(bookingId)}">Hủy đặt phòng</button><button type="button" class="button" data-action="change-booking-room" data-id="${esc(bookingId)}">Đổi phòng</button><button class="button success">Xác nhận nhận phòng</button></div></form>`);
+}
+function changeBookingRoomModal(bookingId) {
+  const booking = ui.state.bookings.find((item) => item.id === bookingId);
+  if (!booking || !['Chờ xác nhận', 'Đã xác nhận'].includes(booking.status)) return toast('Phiếu đặt không thể đổi phòng.', true);
+  const rooms = ui.state.rooms.filter((room) => room.id !== booking.roomId && room.capacity >= booking.guestCount && roomAvailable(ui.state, room.id, booking.arrival, booking.departure, booking.id));
+  openModal(`<h2>Đổi phòng trước khi nhận · ${esc(booking.roomId)}</h2><p>${esc(booking.guestName)} · ${esc(booking.phone)}</p><form id="changeBookingRoomForm"><input type="hidden" name="bookingId" value="${esc(booking.id)}"><div class="field"><label>Phòng mới *</label><select name="newRoomId" required><option value="">Chọn phòng</option>${rooms.map((room) => `<option value="${esc(room.id)}">${esc(room.name)} · ${esc(room.roomType)} · Dự kiến ${money(roomPriceQuote(ui.state, room, booking.arrival, booking.departure, booking.priceMode).total)}</option>`).join('')}</select></div><p>Giữ nguyên khách, lịch đặt và tiền cọc. Tiền phòng được tính lại theo phòng mới.</p>${!rooms.length ? '<p class="error-text">Không có phòng phù hợp trong khoảng đã đặt.</p>' : ''}<div class="actions"><button type="button" class="button" data-action="checkin" data-id="${esc(booking.id)}">Quay lại</button><button class="button primary">Xác nhận đổi phòng</button></div></form>`);
 }
 const financeColumns = ['Ngày', 'Số HĐ', 'Tiền phòng', 'Dịch vụ', 'Phụ thu', 'Giảm giá', 'Phí dịch vụ', 'VAT', 'Doanh thu', 'Thực thu'];
 const financeValues = (row) => [row.date, row.count, row.room, row.service, row.surcharge, row.discount, row.serviceFee, row.vat, row.amount, row.cash];
@@ -589,7 +618,8 @@ document.addEventListener('click', async (event) => {
     if (ui.listFilters[scope]) { ui.listFilters[scope] = { room: '', date: '', guest: '', phone: '' }; render(); }
     return;
   }
-  if (action === 'cancel-booking' && confirm('Xác nhận hủy phiếu đặt phòng?')) await mutate((state) => cancelBooking(state, itemId), 'Đã hủy đặt phòng.');
+  if (action === 'cancel-booking' && confirm('Xác nhận hủy phiếu đặt phòng? Tiền cọc được giữ trong lịch sử phiếu; thao tác này không tự hoàn tiền.')) { const saved = await mutate((state) => cancelBooking(state, itemId), 'Đã hủy đặt phòng.'); if (saved) closeModal(); }
+  if (action === 'change-booking-room') changeBookingRoomModal(itemId);
   if (action === 'open-checkout') checkoutModal(itemId);
   if (action === 'open-extend') extendStayModal(itemId);
   if (action === 'open-transfer') transferRoomModal(itemId);
@@ -670,6 +700,10 @@ document.addEventListener('submit', async (event) => {
   event.preventDefault(); const form = event.target;
   // Named controls (e.g. name="id") can shadow native form properties.
   const formId = form.getAttribute('id'); const data = formData(form);
+  if (formId === 'changeBookingRoomForm') {
+    const saved = await mutate((state) => changeBookingRoom(state, data.bookingId, data.newRoomId), 'Đã đổi phòng.');
+    if (saved) checkInModal(data.bookingId); return;
+  }
   if (formId === 'employeeForm') {
     const saved = await mutate((state) => saveEmployee(state, data.employeeId, data.employeeName), 'Đã lưu nhân viên.');
     if (saved) closeModal(); return;
@@ -690,7 +724,7 @@ document.addEventListener('submit', async (event) => {
   if (formId === 'mapBookingForm') {
     data.roomIds = [data.roomId];
     const direct = event.submitter?.value === 'direct-checkin';
-    if (direct && !data.employeeId) return toast('Vui lòng chọn nhân viên nhận phòng; thêm tên tại Cài đặt → Nhân viên nếu danh sách trống.', true);
+    if (direct && !data.employeeId) return employeeWarning(form.querySelector('[name=employeeId]'));
     if (!Number.isFinite(Date.parse(data.arrival)) || !Number.isFinite(Date.parse(data.departure))) return toast('Vui lòng nhập đủ giờ nhận và giờ trả hợp lệ.', true);
     const saved = await mutate((state) => direct ? directCheckIn(state, data) : createBooking(state, data), direct ? 'Đã nhận phòng trực tiếp từ sơ đồ phòng.' : 'Đã lưu đặt phòng từ sơ đồ phòng.');
     if (saved) closeModal();
@@ -698,7 +732,7 @@ document.addEventListener('submit', async (event) => {
   if (formId === 'bookingForm') {
     data.roomIds = [...ui.booking.selected]; data.arrival = ui.booking.arrival; data.departure = ui.booking.departure; data.priceMode = ui.booking.priceMode;
     const direct = event.submitter?.value === 'direct-checkin';
-    if (direct && !data.employeeId) return toast('Vui lòng chọn nhân viên nhận phòng; thêm tên tại Cài đặt → Nhân viên nếu danh sách trống.', true);
+    if (direct && !data.employeeId) return employeeWarning(form.querySelector('[name=employeeId]'));
     const receivedAt = new Date().toISOString();
     const saved = await mutate((state) => direct ? directCheckIn(state, data, receivedAt) : createBooking(state, data), direct ? 'Đã nhận phòng trực tiếp. Phòng đã chuyển sang Đang ở.' : 'Đã lưu đặt phòng và chốt loại tính giá.');
     if (saved) { ui.booking.selected.clear(); if (direct) navigate('stays'); else render(); }

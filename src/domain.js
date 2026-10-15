@@ -221,6 +221,31 @@ export function directCheckIn(current, payload, actualCheckIn = new Date().toISO
   return next;
 }
 
+export function roomMatchesSearch(state, room, query = '') {
+  const keyword = normalize(query.trim());
+  if (!keyword) return true;
+  const guests = [...state.bookings.filter((b) => b.roomId === room.id && ['Chờ xác nhận', 'Đã xác nhận'].includes(b.status)), ...state.stays.filter((s) => s.roomId === room.id && s.status === 'Đang ở')];
+  if (normalize(`${room.id} ${room.name} ${room.roomType}`).includes(keyword)) return true;
+  const digits = query.replace(/\D/g, '');
+  return guests.some((guest) => normalize(`${guest.guestName} ${guest.phone || ''}`).includes(keyword) || (/^[+\d\s().-]+$/.test(query) && digits && String(guest.phone || '').replace(/\D/g, '').includes(digits)));
+}
+
+export function changeBookingRoom(current, bookingId, newRoomId) {
+  const state = deepClone(current);
+  const booking = state.bookings.find((item) => item.id === bookingId);
+  if (!booking || !['Chờ xác nhận', 'Đã xác nhận'].includes(booking.status)) throw new Error('Phiếu đặt không thể đổi phòng.');
+  if (booking.roomId === newRoomId) throw new Error('Vui lòng chọn phòng khác.');
+  const room = state.rooms.find((item) => item.id === newRoomId && item.active);
+  if (!room || !roomAvailable(state, newRoomId, booking.arrival, booking.departure, booking.id)) throw new Error('Phòng mới không còn trống trong khoảng đã đặt.');
+  if (booking.guestCount > room.capacity) throw new Error('Phòng mới không đủ sức chứa.');
+  const oldRoomId = booking.roomId;
+  const quote = roomPriceQuote(state, room, booking.arrival, booking.departure, booking.priceMode || 'Theo ngày');
+  Object.assign(booking, { roomId: room.id, roomType: room.roomType, rateId: state.rates.find((rate) => rate.roomType === room.roomType)?.id || '', expectedRate: quote.average, expectedRoomAmount: quote.total, rateSnapshot: quote.rateSnapshot, priceBreakdown: quote.breakdown, nightlyRates: (!booking.priceMode || booking.priceMode === 'Theo ngày') ? nightlyRateSnapshot(state, room, booking.arrival, booking.departure) : {} });
+  refreshRoomStatus(state, oldRoomId); refreshRoomStatus(state, newRoomId);
+  audit(state, 'Đổi phòng đặt', 'DAT_PHONG', bookingId, `${oldRoomId} → ${newRoomId}`);
+  return touch(state);
+}
+
 export function cancelBooking(current, bookingId) {
   const state = deepClone(current);
   const booking = state.bookings.find((item) => item.id === bookingId);
